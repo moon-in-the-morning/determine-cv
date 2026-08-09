@@ -1,10 +1,2 @@
-# Your CV data — stays local
-db/cv.db
-db/seed.sql
-cv.pdf
-
-# Typst build output
-*.pdf
-
 # macOS
 .DS_Store

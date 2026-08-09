@@ -6,10 +6,12 @@ the joins.
 
 ```sh
 sqlite3 cv.db < schema.sql
+sqlite3 cv.db < seed.sql   # optional — the example data
 ```
 
-`cv.db` is not in the repo — it holds your CV, so it stays local. Create it
-from `schema.sql` and fill it through the entry form (`python3 server.py`).
+`seed.sql` is a worked example rather than a starting point. To build your own,
+load `schema.sql` alone and fill it through the entry form
+(`python3 server.py`).
 
 ## The two ideas the schema is built on
 
