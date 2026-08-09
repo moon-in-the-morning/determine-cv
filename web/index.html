@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>cv_db — entry form</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="page-head">
+  <h1>cv_db</h1>
+  <p class="sub">Everything you add here is a row. The CV is a query over these rows.</p>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button role="tab" class="tab" data-panel="panel-entry" aria-selected="true">Add entry</button>
+  <button role="tab" class="tab" data-panel="panel-skill" aria-selected="false">Add skill</button>
+  <button role="tab" class="tab" data-panel="panel-browse" aria-selected="false">Browse</button>
+</nav>
+
+<p id="flash" class="flash" role="status" aria-live="polite" hidden></p>
+
+<!-- ────────────────────────────────────────────────────────── add entry ── -->
+<main id="panel-entry" class="panel" role="tabpanel">
+  <form id="entry-form" autocomplete="off">
+
+    <fieldset>
+      <legend>What is it</legend>
+
+      <div class="field">
+        <label for="e-kind">Kind</label>
+        <select id="e-kind" name="kind" required>
+          <option value="position">Position — a job, internship, fellowship</option>
+          <option value="education">Education — a degree or programme</option>
+          <option value="project">Project</option>
+          <option value="publication">Publication, talk, or presentation</option>
+        </select>
+        <p class="hint">All four render identically. The kind is for filtering, not styling.</p>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label for="e-org">Organisation</label>
+          <input id="e-org" name="org" list="orgs" placeholder="Museum of Natural History">
+          <p class="hint">Employer, school, venue, or journal.</p>
+        </div>
+        <div class="field">
+          <label for="e-title">Title / role</label>
+          <input id="e-title" name="title" placeholder="Provenance Research Intern">
+          <p class="hint">Job title, degree, or the name of the piece.</p>
+        </div>
+      </div>
+      <datalist id="orgs"></datalist>
+
+      <div class="field">
+        <label for="e-note">Note</label>
+        <input id="e-note" name="note" placeholder="Anthropology Department; supervisor: Dr. A. Reyes">
+        <p class="hint">Department, advisor, supervisor, or stack. Prints as a third italic line.</p>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>When and where</legend>
+
+      <div class="field">
+        <label for="e-date">Dates, as printed</label>
+        <input id="e-date" name="date_display" placeholder="Sept. 2025 – June 2026">
+        <p class="hint">Verbatim. Use an en dash (–) and keep your own wording.</p>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label for="e-start">Start (sort key)</label>
+          <input id="e-start" name="start_ym" pattern="\d{4}(-\d{2})?" placeholder="2025-09">
+        </div>
+        <div class="field">
+          <label for="e-end">End (sort key)</label>
+          <input id="e-end" name="end_ym" pattern="\d{4}(-\d{2})?" placeholder="2026-06">
+        </div>
+      </div>
+      <p class="hint">YYYY-MM. Used only for reverse-chronological ordering — never printed.</p>
+
+      <div class="field checkbox">
+        <input type="checkbox" id="e-current" name="is_current">
+        <label for="e-current">Ongoing — leave the end date empty</label>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label for="e-location">Location</label>
+          <input id="e-location" name="location" placeholder="Chicago, IL">
+        </div>
+        <div class="field">
+          <label for="e-url">URL</label>
+          <input id="e-url" name="url" type="url" placeholder="https://">
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>What you did</legend>
+
+      <div class="field">
+        <label for="e-bullets">Bullets — one per line</label>
+        <textarea id="e-bullets" name="bullets" rows="5"
+          placeholder="Reconstructed acquisition histories for 400+ objects.&#10;Built a Crystal Reports pipeline against EMu."></textarea>
+        <p class="hint">A leading dash is stripped. Each line becomes its own row, so a variant can pick a subset.</p>
+      </div>
+
+      <div class="field">
+        <label for="e-summary">Summary</label>
+        <textarea id="e-summary" name="summary" rows="2"
+          placeholder="Prose blurb, for entries that read better without bullets."></textarea>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Skills exercised</legend>
+      <div id="e-skills" class="checks"></div>
+      <p class="hint">Add new skills — including languages — on the <b>Add skill</b> tab.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Where it appears <span class="optional">optional</span></legend>
+      <div class="row">
+        <div class="field">
+          <label for="e-variant">Variant</label>
+          <select id="e-variant" name="variant_id"><option value="">— not placed —</option></select>
+        </div>
+        <div class="field">
+          <label for="e-section">Section heading</label>
+          <select id="e-section" name="section_id" disabled></select>
+        </div>
+      </div>
+      <p class="hint">An entry in no variant is stored but renders nowhere. You can place it later.</p>
+    </fieldset>
+
+    <div class="actions">
+      <button type="submit" class="primary">Save entry</button>
+      <button type="reset">Clear</button>
+    </div>
+  </form>
+</main>
+
+<!-- ─────────────────────────────────────────────────────────── add skill ── -->
+<main id="panel-skill" class="panel" role="tabpanel" hidden>
+  <form id="skill-form" autocomplete="off">
+    <fieldset>
+      <legend>Skill or language</legend>
+
+      <div class="row">
+        <div class="field">
+          <label for="s-name">Name</label>
+          <input id="s-name" name="name" required placeholder="Levantine Arabic">
+        </div>
+        <div class="field">
+          <label for="s-category">Category</label>
+          <input id="s-category" name="category" list="categories" required placeholder="Languages">
+          <p class="hint">The bold label in the Skills section. Reuse an existing one where you can.</p>
+        </div>
+      </div>
+      <datalist id="categories"></datalist>
+
+      <div class="row">
+        <div class="field">
+          <label for="s-detail">Detail</label>
+          <input id="s-detail" name="detail" placeholder="A2 Levantine">
+          <p class="hint">Proficiency, version, or scope — printed in parentheses.</p>
+        </div>
+        <div class="field">
+          <label for="s-order">Sort order</label>
+          <input id="s-order" name="sort_order" type="number" min="0" placeholder="auto">
+        </div>
+      </div>
+    </fieldset>
+
+    <div class="actions">
+      <button type="submit" class="primary">Save skill</button>
+      <button type="reset">Clear</button>
+    </div>
+  </form>
+
+  <section class="listing">
+    <h2>Skills on file</h2>
+    <div id="skill-list"></div>
+  </section>
+</main>
+
+<!-- ────────────────────────────────────────────────────────────── browse ── -->
+<main id="panel-browse" class="panel" role="tabpanel" hidden>
+  <div class="filters">
+    <input id="search" type="search" placeholder="Filter by organisation, title, or bullet…">
+    <select id="filter-kind">
+      <option value="">All kinds</option>
+      <option value="position">Positions</option>
+      <option value="education">Education</option>
+      <option value="project">Projects</option>
+      <option value="publication">Publications</option>
+    </select>
+  </div>
+  <div id="entry-list" class="listing"></div>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>

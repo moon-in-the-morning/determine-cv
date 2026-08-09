@@ -1,0 +1,171 @@
+/* cv_db — deliberately plain. This file is the throwaway one: drop in Pico,
+   Tailwind, shadcn, whatever, and delete it. The markup carries the structure. */
+
+:root {
+  --ink: #1a1a1a;
+  --ink-soft: #6b6b6b;
+  --rule: #e0ddd7;
+  --paper: #fbfaf8;
+  --card: #ffffff;
+  --accent: #2f5d50;
+  --error: #a33a2a;
+  --radius: 4px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0 auto;
+  padding: 2rem 1.5rem 6rem;
+  max-width: 54rem;
+  font: 16px/1.5 ui-serif, Georgia, "Adobe Garamond Pro", serif;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+h1, h2, h3, legend, label, .tab, button, input, select, textarea, .tag, .hint, small {
+  font-family: ui-sans-serif, -apple-system, "Helvetica Neue", sans-serif;
+}
+
+/* ------------------------------------------------------------------ head -- */
+
+.page-head { border-bottom: 1px solid var(--rule); padding-bottom: 1rem; }
+.page-head h1 { margin: 0; font-size: 1.5rem; letter-spacing: -0.01em; }
+.sub { margin: 0.25rem 0 0; color: var(--ink-soft); font-style: italic; }
+
+.tabs { display: flex; gap: 0.25rem; margin: 1.25rem 0; }
+.tab {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.tab[aria-selected="true"] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}
+
+.flash {
+  margin: 0 0 1rem;
+  padding: 0.65rem 0.9rem;
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: #eef3f1;
+}
+.flash.error { border-color: var(--error); background: #faeeeb; }
+
+/* ----------------------------------------------------------------- forms -- */
+
+fieldset {
+  margin: 0 0 1.25rem;
+  padding: 1.25rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+legend { padding: 0 0.5rem; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.optional { color: var(--ink-soft); text-transform: none; letter-spacing: 0; font-style: italic; }
+
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+@media (max-width: 40rem) { .row { grid-template-columns: 1fr; } }
+
+.field { margin-bottom: 1rem; }
+.field > label { display: block; margin-bottom: 0.3rem; font-size: 0.85rem; font-weight: 600; }
+
+input, select, textarea {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: #fff;
+  font-size: 0.95rem;
+  color: inherit;
+}
+textarea { resize: vertical; line-height: 1.5; }
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+input:invalid:not(:placeholder-shown) { border-color: var(--error); }
+
+.hint { margin: 0.3rem 0 0; font-size: 0.8rem; color: var(--ink-soft); }
+
+.field.checkbox { display: flex; align-items: center; gap: 0.5rem; }
+.field.checkbox input { width: auto; }
+.field.checkbox label { margin: 0; font-weight: 400; font-size: 0.9rem; }
+
+.checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 1rem; }
+.check-group h3 { margin: 0 0 0.4rem; font-size: 0.75rem; text-transform: uppercase;
+                  letter-spacing: 0.06em; color: var(--ink-soft); }
+.check { display: flex; align-items: baseline; gap: 0.4rem; font-size: 0.9rem; padding: 0.1rem 0; }
+.check input { width: auto; }
+.check i { color: var(--ink-soft); }
+
+.actions { display: flex; gap: 0.5rem; }
+button {
+  padding: 0.55rem 1.1rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: #fff;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:hover { filter: brightness(0.96); }
+
+/* --------------------------------------------------------------- listings -- */
+
+.filters { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+.filters #search { flex: 1; }
+.filters select { width: auto; }
+
+.card {
+  margin-bottom: 1rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.card header { position: relative; padding-right: 2rem; }
+.card h3 { margin: 0 0 0.2rem; font-size: 1rem; }
+.card .meta { margin: 0; font-size: 0.85rem; color: var(--ink-soft); }
+.card .note { margin: 0.2rem 0 0; font-size: 0.85rem; font-style: italic; color: var(--ink-soft); }
+
+.bullets { margin: 0.6rem 0 0; padding-left: 1.1rem; }
+.bullets li { margin-bottom: 0.2rem; }
+
+.chips { list-style: none; margin: 0; padding: 0; }
+.chips li { display: flex; align-items: baseline; justify-content: space-between;
+            padding: 0.2rem 0; border-bottom: 1px dotted var(--rule); }
+.chips i, .chips small { color: var(--ink-soft); font-size: 0.8rem; }
+
+.tag {
+  display: inline-block;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  text-transform: lowercase;
+  color: var(--ink-soft);
+}
+.skill-tags { margin: 0.6rem 0 0; }
+
+.placement { margin: 0.5rem 0 0; font-size: 0.78rem; color: var(--ink-soft); }
+.placement span + span { margin-left: 0.75rem; }
+.placement .unplaced { color: var(--error); font-style: italic; }
+
+.inline-add { display: flex; gap: 0.4rem; margin-top: 0.6rem; }
+.inline-add input { font-size: 0.85rem; }
+
+.delete {
+  position: absolute; top: 0; right: 0;
+  padding: 0 0.45rem;
+  border: none; background: none;
+  color: var(--ink-soft); font-size: 1.1rem; line-height: 1.4;
+}
+.chips .delete, .bullets .delete { position: static; }
+.delete:hover { color: var(--error); }
+
+.listing h2 { margin: 2rem 0 0.75rem; font-size: 0.8rem; text-transform: uppercase;
+              letter-spacing: 0.08em; color: var(--ink-soft); }
+.empty { color: var(--ink-soft); font-style: italic; }
