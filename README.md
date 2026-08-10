@@ -76,6 +76,58 @@ The category is the bold label in the Skills section, so reuse an existing one
 where you can. Ticking a skill prints it **in the document you're building**;
 editing its name changes it everywhere.
 
+A skills heading can be narrowed to one category, so "Languages" and "Technical
+Skills" can be two headings over one ticked selection rather than two copies of
+it. Leave it on *every ticked skill* and it prints the lot.
+
+### References
+
+Your referees, once each, ticked per document the way skills are — most
+applications want a different three. Each prints as a stack of lines under the
+bold name, in the order the card shows: title, institution, department, address,
+email, phone. **How you know them** is stored and never printed; it is the note
+that keeps a list of eight legible a year later.
+
+They appear only where a heading has the `references` style, so a document with
+no such heading names nobody even if referees are ticked.
+
+### Versions
+
+Every generate is compared against the last one. A **version is a distinct state
+of the document, not a press of the button** — regenerate something unchanged
+and you get back the version it already is. The number and date are written into
+the PDF's metadata (`Keywords`), so they travel with the file after it leaves
+this machine:
+
+```sh
+python3 -c "from pypdf import PdfReader; print(PdfReader('cv.generated.pdf').metadata)"
+```
+
+Under each version you record where it went: recipient, organisation, date, and
+how. One PDF to four search committees is four lines under one version, which is
+what makes "which version does Robbins have?" answerable. Each version keeps its
+own Typst source, so an old one downloads and recompiles exactly as it was sent,
+long after the rows behind it have been reworded.
+
+## The six ways a heading can render
+
+Set on each heading in the Build tab. `entries` and `itemized` read the *same
+rows* — the difference is how much of each prints, so switching between them
+turns a described section into a listed one without retyping anything.
+
+| Style | Prints |
+| --- | --- |
+| `entries` | The full block: bold title line, dates, note, bullets. |
+| `itemized` | One line: the date, then title, organisation, location. |
+| `skills` | `Category: a, b, c` as running text. |
+| `skill-lines` | One per line — `English – native proficiency`. |
+| `references` | The referee blocks described above. |
+| `profile` | The prose paragraph from your profile. |
+
+An itemized heading says on screen what it is leaving out. Nothing is deleted to
+list it: the note and the bullets stay in the library and print again the moment
+you switch the heading back.
+
 ## Generating without the browser
 
 `cv_typst.render()` is a pure function of the rows, so it needs no server —
@@ -87,6 +139,12 @@ python3 -c "import sqlite3, cv_typst; print(cv_typst.render(sqlite3.connect('db/
 
 Same rows in, byte-identical file out — every `ORDER BY` ends in a unique
 column, so nothing is left to SQLite's discretion.
+
+That purity is what makes the version list work, rather than the other way
+round: because the output depends on nothing but the rows, its sha256 answers
+"has this document actually changed?" A timestamp or a run counter in the render
+would have destroyed that, so the version stamp is a separate argument the
+server passes in — and the digest is always taken before it is applied.
 
 `web/style.css` is deliberately plain and self-contained. Swapping in a UI
 framework means replacing that one file — the markup in `index.html` is
@@ -157,6 +215,11 @@ keeps that stream identical to what you see:
   unrelated lines in the extracted text.
 - **No grids and nothing right-aligned.** Dates and locations sit on their own
   left-aligned line, so there is no column order for a parser to get wrong.
+- **The itemized style's date is a word, not a column.** Academic CVs often set
+  years in a narrow left-hand column; that is two text streams, and extractors
+  interleave them — a wrapped line lands in the middle of the next year. Here
+  the date is followed by a wide space in the same paragraph, so it reads as
+  `2018  Colloquium Chair, Anthropology` on one line and wraps to the margin.
 - **Conventional headings** (EXPERIENCE, EDUCATION, SKILLS). Parsers match
   these against a known list; clever names fall through.
 - **Skills as running text**, not chips or a grid, so every term is picked up.

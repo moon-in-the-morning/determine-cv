@@ -7,7 +7,26 @@
 
 'use strict';
 
-const db = { meta: null, library: { entries: [], skills: [] }, doc: null };
+const db = {
+  meta: null,
+  library: { entries: [], skills: [], references: [] },
+  doc: null,
+  versions: [],
+};
+
+/* The six ways a heading can render, and what each one reads from. Kept in one
+   place because the Build tab, the new-heading form, and the tree all need it. */
+const STYLES = [
+  ['entries', 'entries — full, with bullets'],
+  ['itemized', 'itemized — one line each'],
+  ['skills', 'skills — comma-separated'],
+  ['skill-lines', 'skill-lines — one per line'],
+  ['references', 'references'],
+  ['profile', 'profile'],
+];
+
+const SKILL_STYLES = ['skills', 'skill-lines'];
+const ENTRY_STYLES = ['entries', 'itemized'];
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -162,10 +181,24 @@ function renderTree() {
     const style = document.createElement('select');
     style.className = 'style-select';
     style.title = 'How this block renders';
-    ['entries', 'skills', 'profile'].forEach(s => style.append(option(s, s)));
+    STYLES.forEach(([value, label]) => style.append(option(value, label)));
     style.value = sec.style;
     style.onchange = () => write('PATCH', `/api/sections/${sec.id}`, { style: style.value });
     head.append(style);
+
+    // Which slice of the ticked skills this heading prints. Without it, two
+    // skills headings in one document would each print all of them.
+    if (SKILL_STYLES.includes(sec.style)) {
+      const category = document.createElement('select');
+      category.className = 'style-select';
+      category.title = 'Which category of skills this heading prints';
+      category.append(option('', 'every ticked skill'));
+      db.meta.categories.forEach(c => category.append(option(c, c)));
+      category.value = sec.category || '';
+      category.onchange = () => write('PATCH', `/api/sections/${sec.id}`,
+                                      { category: category.value });
+      head.append(category);
+    }
 
     head.append(deleteButton(
       `Delete the heading “${sec.heading}” from this document? ` +
@@ -179,11 +212,24 @@ function renderTree() {
       p.append(editable('/api/profile', 'summary', db.meta.profile.summary,
         { placeholder: 'No profile paragraph yet — click to write one.', multiline: true }));
       block.append(p);
-    } else if (sec.style === 'skills') {
+    } else if (SKILL_STYLES.includes(sec.style)) {
+      const chosen = db.library.skills.filter(
+        s => db.doc.skill_ids.includes(s.id) && (!sec.category || s.category === sec.category));
       const note = document.createElement('p');
       note.className = 'hint';
-      note.innerHTML = `${db.doc.skill_ids.length} of ${db.library.skills.length} skills ` +
-                       `ticked for this document — choose them on the <b>Skills</b> tab.`;
+      note.innerHTML = `Prints ${chosen.length} skill${chosen.length === 1 ? '' : 's'}` +
+                       (sec.category ? ` from ${esc(sec.category)}` : ' — every ticked one') +
+                       ` · tick them on the <b>Skills</b> tab.`;
+      block.append(note);
+    } else if (sec.style === 'references') {
+      const chosen = db.library.references.filter(r => db.doc.reference_ids.includes(r.id));
+      const note = document.createElement('p');
+      note.className = 'hint';
+      note.innerHTML = chosen.length
+        ? `Names ${chosen.map(r => esc(r.name)).join(', ')} · ` +
+          `choose them on the <b>References</b> tab.`
+        : `No referees ticked for this document — choose them on the ` +
+          `<b>References</b> tab. An empty heading is skipped when generating.`;
       block.append(note);
     } else {
       const placed = db.doc.placements
@@ -213,12 +259,25 @@ function placedRow(e, placement, sec) {
   wrap.dataset.id = e.id;
 
   const shown = e.bullets.filter(b => !db.doc.hidden_bullets.includes(b.id));
+  const itemized = sec.style === 'itemized';
   const summary = document.createElement('summary');
   summary.innerHTML =
     `<span class="title">${esc(entryLabel(e))}</span> ` +
-    `<span class="tag">#${shown.length ? 'entry' : 'item'}</span> ` +
+    `<span class="tag">#${itemized ? 'line-item' : shown.length ? 'entry' : 'item'}</span> ` +
     `<span class="meta">${esc(e.date_display || '')}</span>`;
   wrap.append(summary);
+
+  // Say plainly what an itemized heading drops, so nothing goes missing
+  // quietly. It is all still here — switch the style back and it returns.
+  if (itemized && (shown.length || e.note)) {
+    const trimmed = document.createElement('p');
+    trimmed.className = 'hint';
+    trimmed.textContent =
+      `Prints as one line: date, then title, organisation, location. ` +
+      `The note and ${shown.length} bullet${shown.length === 1 ? '' : 's'} ` +
+      `stay in the library and print again under the entries style.`;
+    wrap.append(trimmed);
+  }
 
   const bar = document.createElement('div');
   bar.className = 'entry-bar';
@@ -230,7 +289,7 @@ function placedRow(e, placement, sec) {
   const move = document.createElement('select');
   move.className = 'style-select';
   move.title = 'Move to another heading';
-  db.doc.sections.filter(s => s.style === 'entries')
+  db.doc.sections.filter(s => ENTRY_STYLES.includes(s.style))
                  .forEach(s => move.append(option(s.id, s.heading)));
   move.value = sec.id;
   move.onchange = () => write('PATCH', `/api/documents/${db.doc.document.id}/place/${e.id}`,
@@ -345,7 +404,7 @@ function libraryRow(e) {
   bar.className = 'entry-bar';
 
   if (db.doc) {
-    const sections = db.doc.sections.filter(s => s.style === 'entries');
+    const sections = db.doc.sections.filter(s => ENTRY_STYLES.includes(s.style));
     if (!sections.length) {
       const hint = document.createElement('span');
       hint.className = 'hint';
@@ -499,6 +558,185 @@ function renderSkills() {
   }
 }
 
+/* -------------------------------------------------------------- references */
+
+function renderReferences() {
+  const chosen = new Set(db.doc?.reference_ids ?? []);
+  const list = $('#reference-list');
+  list.replaceChildren();
+
+  if (!db.library.references.length) {
+    list.innerHTML = '<p class="empty">No references yet — add one below.</p>';
+    return;
+  }
+
+  for (const r of db.library.references) {
+    const card = document.createElement('article');
+    const on = chosen.has(r.id);
+    card.className = 'card' + (on ? '' : ' off');
+
+    const head = document.createElement('header');
+    if (db.doc) {
+      head.append(checkbox(on, `Name them in ${db.doc.document.title}`,
+        checked => write('PUT', `/api/documents/${db.doc.document.id}/references/${r.id}`,
+                         { include: checked ? 1 : 0 })));
+    }
+    const h3 = document.createElement('h3');
+    h3.append(editable(`/api/references/${r.id}`, 'name', r.name));
+    head.append(h3);
+    head.append(deleteButton(
+      `Delete ${r.name} from your references? They go from every document.`,
+      `/api/references/${r.id}`));
+    card.append(head);
+
+    // The printed block, field by field, in the order it prints.
+    const fields = document.createElement('dl');
+    fields.className = 'fields';
+    for (const [label, field, opts] of [
+      ['Title', 'title', {}], ['Institution', 'org', {}],
+      ['Department', 'department', {}], ['Address', 'address', { multiline: true }],
+      ['Email', 'email', {}], ['Phone', 'phone', {}],
+      ['How you know them', 'relation', {}],
+    ]) {
+      const dt = document.createElement('dt');
+      dt.textContent = label;
+      const dd = document.createElement('dd');
+      if (field === 'relation') dd.className = 'unprinted';
+      dd.append(editable(`/api/references/${r.id}`, field, r[field],
+                         { placeholder: '—', ...opts }));
+      fields.append(dt, dd);
+    }
+    card.append(fields);
+
+    const meta = document.createElement('p');
+    meta.className = 'meta';
+    meta.textContent = r.used_in
+      ? `Named in ${r.used_in} document${r.used_in === 1 ? '' : 's'}`
+      : 'Named in no document';
+    card.append(meta);
+
+    list.append(card);
+  }
+}
+
+/* ---------------------------------------------------------------- versions */
+
+/** "2026-08-10T05:39:10Z" → "10 Aug 2026, 05:39 UTC". */
+function stamp(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const date = d.toLocaleDateString(undefined,
+    { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  const time = d.toLocaleTimeString(undefined,
+    { hour: '2-digit', minute: '2-digit', timeZone: 'UTC', hour12: false });
+  return `${date}, ${time} UTC`;
+}
+
+function renderVersions() {
+  const list = $('#version-list');
+  list.replaceChildren();
+
+  if (!db.doc) {
+    list.innerHTML = '<p class="empty">No document selected.</p>';
+    return;
+  }
+  if (!db.versions.length) {
+    list.innerHTML = '<p class="empty">Nothing generated yet. ' +
+                     'Press Generate on the Build tab and this fills in.</p>';
+    return;
+  }
+
+  for (const v of db.versions) {
+    const card = document.createElement('article');
+    card.className = 'card version-card';
+
+    const head = document.createElement('header');
+    const h3 = document.createElement('h3');
+    h3.textContent = `Version ${v.number}`;
+    head.append(h3);
+
+    const when = document.createElement('span');
+    when.className = 'meta';
+    when.textContent = stamp(v.created_at);
+    head.append(when);
+
+    const digest = document.createElement('code');
+    digest.className = 'digest';
+    digest.textContent = v.digest.slice(0, 12);
+    digest.title = `sha256 ${v.digest}`;
+    head.append(digest);
+
+    const source = document.createElement('a');
+    source.className = 'download-link';
+    source.href = `/download/version?id=${v.id}`;
+    source.textContent = '↓ .typ';
+    source.title = 'The exact Typst this version was';
+    head.append(source);
+    card.append(head);
+
+    const notes = document.createElement('p');
+    notes.className = 'note';
+    notes.append(editable(`/api/versions/${v.id}`, 'notes', v.notes,
+                          { placeholder: '+ what changed, or what this one is for' }));
+    card.append(notes);
+
+    const sends = document.createElement('ul');
+    sends.className = 'sends';
+    if (!v.sends.length) {
+      const li = document.createElement('li');
+      li.className = 'hint';
+      li.textContent = 'Not sent anywhere yet.';
+      sends.append(li);
+    }
+    for (const s of v.sends) {
+      const li = document.createElement('li');
+      const who = document.createElement('span');
+      who.className = 'title';
+      who.append(editable(`/api/sends/${s.id}`, 'recipient', s.recipient));
+      li.append(who);
+
+      for (const [field, placeholder] of
+           [['org', '+ where'], ['sent_on', '+ when'], ['channel', '+ how']]) {
+        const bit = document.createElement('span');
+        bit.className = 'meta';
+        bit.append(editable(`/api/sends/${s.id}`, field, s[field], { placeholder }));
+        li.append(bit);
+      }
+
+      const note = document.createElement('small');
+      note.append(editable(`/api/sends/${s.id}`, 'notes', s.notes, { placeholder: '+ note' }));
+      li.append(note);
+      li.append(deleteButton(`Delete the record of sending this to ${s.recipient}?`,
+                             `/api/sends/${s.id}`));
+      sends.append(li);
+    }
+    card.append(sends);
+    card.append(sendForm(v));
+    list.append(card);
+  }
+}
+
+function sendForm(v) {
+  const form = document.createElement('form');
+  form.className = 'inline-add';
+  form.innerHTML =
+    `<input name="recipient" placeholder="Sent to…" aria-label="Recipient" required>
+     <input name="org" placeholder="Where" aria-label="Organisation">
+     <input name="sent_on" type="date" aria-label="Date sent">
+     <input name="channel" list="channels" placeholder="How" aria-label="Channel">
+     <button type="submit">Record</button>`;
+  form.onsubmit = async event => {
+    event.preventDefault();
+    const body = Object.fromEntries(new FormData(form));
+    if (!body.recipient.trim()) return;
+    if (await write('POST', `/api/versions/${v.id}/sends`, body)) {
+      form.reset();
+      flash(`Recorded: version ${v.number} → ${body.recipient}.`);
+    }
+  };
+  return form;
+}
+
 /* -------------------------------------------------------------- chrome ---- */
 
 function renderChrome() {
@@ -515,7 +753,7 @@ function renderChrome() {
   const file = $('#e-section');
   const kept = file.value;
   file.replaceChildren(option('', 'Library only — place it later'));
-  (db.doc?.sections ?? []).filter(s => s.style === 'entries')
+  (db.doc?.sections ?? []).filter(s => ENTRY_STYLES.includes(s.style))
     .forEach(s => file.append(option(s.id, s.heading)));
   file.value = kept;
 
@@ -551,6 +789,17 @@ $('#skill-form').onsubmit = async event => {
     event.target.reset();
     await refresh();
     flash(`Saved “${body.name}”. Tick it to print it in this document.`);
+  } catch (err) { flash(err.message, 'error'); }
+};
+
+$('#reference-form').onsubmit = async event => {
+  event.preventDefault();
+  const body = Object.fromEntries(new FormData(event.target));
+  try {
+    await api('POST', '/api/references', body);
+    event.target.reset();
+    await refresh();
+    flash(`Saved ${body.name}. Tick them to name them in this document.`);
   } catch (err) { flash(err.message, 'error'); }
 };
 
@@ -662,8 +911,15 @@ $('#generate').onclick = async () => {
     link.download = out.filename;
     link.textContent = `↓ ${out.filename}`;
     link.hidden = false;
-    status.textContent = out.compiled ? `wrote ${out.path} and ${out.pdf}`
-                                      : `wrote ${out.path} — PDF not compiled`;
+
+    const v = out.version;
+    const which = v.new
+      ? `version ${v.number}`
+      : `version ${v.number} — unchanged since ${stamp(v.created_at)}`;
+    status.textContent = (out.compiled ? `wrote ${out.path} and ${out.pdf}`
+                                       : `wrote ${out.path} — PDF not compiled`) +
+                         ` · ${which}`;
+    await refresh();          // so the Versions tab shows it without a reload
   } catch (err) {
     status.textContent = '';
     flash(err.message, 'error');
@@ -701,9 +957,13 @@ async function refresh() {
   const wanted = db.meta.documents.find(d => d.id === activeId()) ?? db.meta.documents[0];
   if (wanted) {
     setActive(wanted.id);
-    db.doc = await api('GET', `/api/documents/${wanted.id}`);
+    [db.doc, db.versions] = await Promise.all([
+      api('GET', `/api/documents/${wanted.id}`),
+      api('GET', `/api/documents/${wanted.id}/versions`),
+    ]);
   } else {
     db.doc = null;
+    db.versions = [];
     localStorage.removeItem(ACTIVE_KEY);
   }
 
@@ -712,6 +972,8 @@ async function refresh() {
   renderLibrary();
   renderDocuments();
   renderSkills();
+  renderReferences();
+  renderVersions();
   $$('.entry-row').forEach(d => { if (open.has(d.dataset.id)) d.open = true; });
 }
 

@@ -42,6 +42,7 @@ line, bullets. So they're `entry` rows distinguished by `kind`, mirroring the
 | `entry` | Every line-item. `kind` = position / education / project / publication. |
 | `bullet` | A **pool** of bullets per entry, not a fixed list. |
 | `skill`, `entry_skill` | Skills, and which experience evidences them. |
+| `reference` | Professional referees. `relation` is your note to yourself and never prints. |
 
 **The documents** — arrangements over that library.
 
@@ -52,13 +53,21 @@ line, bullets. So they're `entry` rows distinguished by `kind`, mirroring the
 | `doc_entry` | Which entry sits under which heading, in what order. No row = not in that document. |
 | `doc_bullet` | Bullets a document has cut. **No row means the bullet prints.** |
 | `doc_skill` | Which skills a document prints. Opt-in: a new document has none. |
+| `doc_reference` | Which referees a document names. Opt-in, like skills. |
 
 Note the two defaults pull in opposite directions, and both are deliberate.
 Pulling an entry into a document should bring all its bullets, so `doc_bullet`
 only records cuts. Skills are a deliberate selection every time, so `doc_skill`
 records inclusions.
 
-## Four decisions worth knowing
+**The record** — what you generated and where it went.
+
+| Table | Holds |
+| --- | --- |
+| `version` | One row per distinct state of a document, with its `digest`, its `created_at`, and the whole Typst `source`. |
+| `send` | One row per time a version went to someone: recipient, org, date, channel. |
+
+## Five decisions worth knowing
 
 **Dates are stored twice.** CV dates are prose — "Autumn 2025", "Expected June
 2027", "2018 – 2019". Storing them as `DATE` loses the wording and gains
@@ -69,11 +78,24 @@ order. They are never printed.
 **`section.style` decides which template function runs.** It's what makes
 generation mechanical instead of a judgment call:
 
-| `style` | Renders as |
-| --- | --- |
-| `entries` | `#entry(...)[- bullets]`, or `#item(note: ...)[...]` when an entry has no bullets |
-| `skills` | `#skill("Category")[comma-separated names]` |
-| `profile` | bare prose from `profile.summary` |
+| `style` | Renders as | Reads from |
+| --- | --- | --- |
+| `entries` | `#entry(...)[- bullets]`, or `#item(note: ...)[...]` with no bullets | `doc_entry` |
+| `itemized` | `#line-item(date: ...)[one line]` | `doc_entry` |
+| `skills` | `#skill("Category")[comma-separated names]` | `doc_skill` |
+| `skill-lines` | `#skill-line(detail: [native])[English]`, one per line | `doc_skill` |
+| `references` | `#reference([Name], lines: (...))` | `doc_reference` |
+| `profile` | bare prose from `profile.summary` | `profile` |
+
+`entries` and `itemized` read the *same rows*. Switching a heading between them
+turns a described section into a listed one without retyping anything: the note
+and the bullets sit untouched in the library while `itemized` prints only the
+date, title, organisation, and location. It shows less; it does not store less.
+
+Both skills styles read the same ticked pool, so `section.category` can take one
+slice of it — which is what lets "Languages" and "Technical Skills" be two
+headings over one selection instead of two copies of it. `category IS NULL`
+prints everything ticked.
 
 **Bullets are a pool.** To reword one for a particular application, add another
 row — each document chooses which it prints. Nothing overwrites your original
@@ -82,9 +104,19 @@ phrasing, and the alternative stays one click away.
 **An entry in no document is normal, not broken.** It's in the library, ready
 to be pulled into whatever you write next.
 
+**A version is a state, not a click.** Generating renders the document, hashes
+it, and compares that digest to the newest version. Unchanged gives you back the
+version it already is; changed opens a new one. So the list stays a list of real
+changes, and sending one PDF to four search committees is four `send` rows
+against the single version they actually shared — which is the question you ask
+a year later.
+
+The digest covers the *unstamped* render. The version number is written into the
+file afterwards, so it can't be part of what decides whether the file changed.
+
 ## Querying it
 
-Four views do the assembly, each scoped to a document and ordered so the output
+Six views do the assembly, each scoped to a document and ordered so the output
 is byte-identical run to run.
 
 ```sql
@@ -111,6 +143,18 @@ SELECT id, org, title FROM entry
 -- Gap check: experience with no skills attached
 SELECT id, org, title FROM entry
  WHERE kind = 'position' AND id NOT IN (SELECT entry_id FROM entry_skill);
+
+-- Everything that has gone out, newest first
+SELECT sent_on, recipient, org, document, version FROM v_sent
+ ORDER BY sent_on DESC;
+
+-- Which version does this person have? — the one to reread before an interview
+SELECT v.number, v.created_at FROM send s JOIN version v ON v.id = s.version_id
+ WHERE s.recipient LIKE '%Robbins%';
+
+-- Generated but never sent anywhere
+SELECT number, created_at FROM version
+ WHERE id NOT IN (SELECT version_id FROM send);
 ```
 
 ## Scripts
@@ -120,9 +164,11 @@ SELECT id, org, title FROM entry
 | `dump_seed.py` | Writes `seed.sql` from `cv.db`. Deterministic, so the diff shows only what you edited. |
 | `migrate_to_single_document.py` | One-off: multi-variant → single document with include flags. |
 | `migrate_to_documents.py` | One-off: that → this library-and-documents schema. |
+| `migrate_add_references_and_versions.py` | One-off: adds references, versions, sends, and the three new section styles. |
 
-Both migrations have already run. They're kept as the record of what happened
-to the data, and each leaves a `cv.db.pre-*` backup beside the database.
+All three migrations have already run. They're kept as the record of what
+happened to the data, and each leaves a `cv.db.pre-*` backup beside the
+database.
 
 ## Seeding it from existing documents
 

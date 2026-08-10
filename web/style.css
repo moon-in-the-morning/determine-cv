@@ -237,3 +237,33 @@ button.small { padding: 0.25rem 0.6rem; font-size: 0.78rem; }
 .meta.unused { color: var(--error); font-style: italic; }
 
 .entry-row.card { margin-bottom: 0.6rem; padding: 0.75rem 1rem; border-top: 1px solid var(--rule); }
+
+/* ------------------------------------------------- references & versions -- */
+
+/* A reference card whose box isn't ticked: on file, not in this document. */
+.card.off { opacity: 0.55; }
+.card.off:hover { opacity: 1; }
+
+.card > header { display: flex; align-items: baseline; gap: 0.5rem; }
+.card > header h3 { flex: 1; margin: 0; font-size: 0.95rem;
+                    text-transform: none; letter-spacing: 0; color: var(--ink); }
+
+/* Stored but never printed — the note to yourself. */
+.fields dd.unprinted { color: var(--ink-soft); font-style: italic; }
+
+.version-card .digest { font-size: 0.72rem; color: var(--ink-soft);
+                        font-family: ui-monospace, Menlo, monospace; }
+.version-card .note { margin: 0.1rem 0 0.6rem; font-size: 0.85rem;
+                      font-style: italic; color: var(--ink-soft); }
+
+.sends { margin: 0 0 0.5rem; padding: 0; list-style: none;
+         border-left: 2px solid var(--rule); }
+.sends li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem;
+            padding: 0.3rem 0 0.3rem 0.75rem; font-size: 0.85rem; }
+.sends li + li { border-top: 1px solid var(--rule); }
+.sends .title { font-weight: 600; }
+.sends .meta, .sends small { font-size: 0.78rem; color: var(--ink-soft);
+                             font-family: ui-sans-serif, sans-serif; }
+.sends li.hint { color: var(--ink-soft); font-style: italic; }
+
+.version-card .inline-add input[type="date"] { max-width: 9.5rem; }

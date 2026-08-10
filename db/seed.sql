@@ -9,7 +9,7 @@ PRAGMA foreign_keys = ON;
 
 -- profile (1 rows) -----------------------------------------------------
 INSERT INTO profile (id, full_name, legal_name, pronouns, summary) VALUES
-(1, 'Moon Younes', 'Savannah Moon Goldstein', 'All pronouns', 'Researcher and organizer with eight years of leadership across non-profit administration, transnational advocacy, public health, and cultural heritage policy. Currently a Master of Divinity candidate at the University of Chicago.');
+(1, 'Moon Younes', 'Savannah Moon Goldstein', 'All pronouns', 'Researcher with over 8 years of community organizing experience working in transnational advocacy coalitions, public health, public policy, museum studies and cultural heritage policy. I am developing skills in software engineering, data analysis and systems design. Currently pursuing a masters of Divinity at the University of Chicago.');
 
 -- contact (3 rows) -----------------------------------------------------
 INSERT INTO contact (id, profile_id, kind, value, display, sort_order) VALUES
@@ -57,7 +57,7 @@ INSERT INTO bullet (id, entry_id, text, sort_order) VALUES
 (11, 2, 'Manage editorial workflow, source verification, and archival coordination for the project''s public platform; contribute to website design and organization in WordPress.', 4),
 (13, 3, 'Designed a long-term framework for digitizing the archives of small, immigrant, and minority religious institutions in Chicago, including workflow planning and metadata structure design.', 1),
 (14, 3, 'Compiled and curated an annotated research library and bibliography to inform the project''s preservation strategy.', 2),
-(15, 4, 'Supported research on feminist models of affordable housing and their intersections with mental health, disability justice, and domestic violence prevention, with focus on POC and trans housing-insecure populations.', 1),
+(15, 4, 'Supported research on gender inclusive models of affordable housing and their intersections with mental health, disability justice, and domestic violence prevention, with focus on POC and trans housing-insecure populations in Canada and the United States.', 1),
 (16, 4, 'Conducted literature reviews, prepared conference presentations, and copyedited academic publications.', 2),
 (17, 5, 'Led weekly discussion sections for a foundational undergraduate survey course; developed and delivered original lesson plans on visual analysis, the anthropology of art history, and contextual interpretation.', 1),
 (18, 5, 'Held extensive office hours providing individualized writing support, conceptual clarification, and academic guidance.', 2),
@@ -74,9 +74,9 @@ INSERT INTO bullet (id, entry_id, text, sort_order) VALUES
 (29, 8, 'Collected and archived oral histories of displacement of the Palestinian diaspora in Chicago.', 3),
 (30, 9, 'Wrote and managed federal grant application cycles for the Salwa Food Pantry; reviewed annual budgets, interpreted tax returns and financial statements, and advised on budget presentation for funders.', 1),
 (31, 9, 'Rebuilt organizational documentation systems and established long-term reporting relationships with federal and private funders.', 2),
-(32, 9, 'Managed federal grant compliance and reporting.', 3),
+(32, 9, 'Managed federal grant compliance and reporting for the FEMA Non-Profit Security Grant, securing $200,000 in grant funding for the organization to improve physical and cyber security.', 3),
 (33, 10, 'Lobbied at the Illinois State Capitol and coordinated student testimony in support of the Mental Health Early Action on Campus Act (HB2152, signed August 2019).', 1),
-(34, 10, 'Registered 3,000+ students to vote at UIC over a five-month period, in coalition with Chicago Votes and Power to the Polls.', 2),
+(34, 10, 'Registered 300+ students to vote at UIC over a five-month period, in coalition with Chicago Votes and Power to the Polls', 2),
 (35, 10, 'Delivered presentations on higher education access and mental health advocacy across the Chicagoland area.', 3),
 (36, 11, 'Founded a grassroots sexual health and gender education initiative in collaboration with Planned Parenthood Southeast.', 1),
 (37, 11, 'Developed and taught the first comprehensive sexual education program at Academe of the Oaks High School in Atlanta.', 2),
@@ -189,15 +189,15 @@ INSERT INTO document (id, slug, title, density, paper, notes) VALUES
 (1, 'full-cv', 'Full CV', 1.0, 'us-letter', 'Everything, in the arrangement this database was migrated from.');
 
 -- section (8 rows) -----------------------------------------------------
-INSERT INTO section (id, document_id, heading, style, sort_order, include) VALUES
-(1, 1, 'Profile', 'profile', 1, 1),
-(2, 1, 'Research Experience', 'entries', 2, 1),
-(3, 1, 'Teaching', 'entries', 3, 1),
-(4, 1, 'Non-Profit Leadership and Organizing', 'entries', 4, 1),
-(5, 1, 'Education', 'entries', 5, 1),
-(6, 1, 'Skills', 'skills', 6, 1),
-(7, 1, 'Writing and Presentations', 'entries', 7, 1),
-(8, 1, 'Additional Experience', 'entries', 8, 0);
+INSERT INTO section (id, document_id, heading, style, category, sort_order, include) VALUES
+(1, 1, 'Profile', 'profile', NULL, 1, 1),
+(2, 1, 'Research Experience', 'entries', NULL, 2, 1),
+(3, 1, 'Teaching', 'entries', NULL, 3, 1),
+(4, 1, 'Non-Profit Leadership and Organizing', 'entries', NULL, 4, 1),
+(5, 1, 'Education', 'entries', NULL, 5, 1),
+(6, 1, 'Skills', 'skills', NULL, 6, 1),
+(7, 1, 'Writing and Presentations', 'entries', NULL, 7, 1),
+(8, 1, 'Additional Experience', 'entries', NULL, 8, 0);
 
 -- doc_entry (24 rows) ---------------------------------------------------
 INSERT INTO doc_entry (document_id, entry_id, section_id, sort_order, include) VALUES
@@ -208,10 +208,10 @@ INSERT INTO doc_entry (document_id, entry_id, section_id, sort_order, include) V
 (1, 5, 3, 1, 1),
 (1, 6, 4, 1, 1),
 (1, 7, 4, 2, 1),
-(1, 8, 4, 3, 1),
+(1, 8, 4, 3, 0),
 (1, 9, 4, 4, 1),
 (1, 10, 4, 5, 1),
-(1, 11, 4, 6, 1),
+(1, 11, 4, 6, 0),
 (1, 12, 4, 7, 1),
 (1, 13, 4, 8, 1),
 (1, 14, 8, 1, 1),

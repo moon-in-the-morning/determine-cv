@@ -18,6 +18,8 @@
   <button role="tab" class="tab" data-panel="panel-documents" aria-selected="false">Documents</button>
   <button role="tab" class="tab" data-panel="panel-library" aria-selected="false">Library</button>
   <button role="tab" class="tab" data-panel="panel-skill" aria-selected="false">Skills</button>
+  <button role="tab" class="tab" data-panel="panel-references" aria-selected="false">References</button>
+  <button role="tab" class="tab" data-panel="panel-versions" aria-selected="false">Versions</button>
 </nav>
 
 <p id="flash" class="flash" role="status" aria-live="polite" hidden></p>
@@ -50,8 +52,11 @@
     <input name="heading" placeholder="New heading — Work Experience, Teaching, Projects…"
            aria-label="New section heading">
     <select name="style" aria-label="Section style">
-      <option value="entries">entries</option>
-      <option value="skills">skills</option>
+      <option value="entries">entries — full, with bullets</option>
+      <option value="itemized">itemized — one line each</option>
+      <option value="skills">skills — comma-separated</option>
+      <option value="skill-lines">skill-lines — one per line</option>
+      <option value="references">references</option>
       <option value="profile">profile</option>
     </select>
     <button type="submit">Add heading</button>
@@ -268,6 +273,91 @@
       </div>
     </fieldset>
   </form>
+</main>
+
+<!-- ────────────────────────────────────────────────────────── references ── -->
+<main id="panel-references" class="panel" role="tabpanel" hidden>
+  <section class="listing">
+    <h2>Professional references
+      <span class="hint">tick to name them in the document you're building · click to edit</span></h2>
+    <p class="hint">
+      Printed as a stack of lines under the bold name, in the order below.
+      A document needs a heading with the <b>references</b> style for them to
+      appear — add one on the Build tab.
+    </p>
+    <div id="reference-list"></div>
+  </section>
+
+  <form id="reference-form" autocomplete="off">
+    <fieldset>
+      <legend>New reference</legend>
+      <div class="row">
+        <div class="field">
+          <label for="r-name">Name</label>
+          <input id="r-name" name="name" required placeholder="Dr. A. Reyes">
+        </div>
+        <div class="field">
+          <label for="r-title">Title</label>
+          <input id="r-title" name="title" placeholder="Repatriation Director">
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label for="r-org">Institution</label>
+          <input id="r-org" name="org" placeholder="Museum of Natural History">
+        </div>
+        <div class="field">
+          <label for="r-department">Department</label>
+          <input id="r-department" name="department" placeholder="Anthropology Department">
+        </div>
+      </div>
+      <div class="field">
+        <label for="r-address">Address</label>
+        <textarea id="r-address" name="address" rows="2"
+          placeholder="1400 S Lake Shore Dr&#10;Chicago, IL 60605"></textarea>
+        <p class="hint">One line per line — they stay separate in the printed block.</p>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label for="r-email">Email</label>
+          <input id="r-email" name="email" type="email" placeholder="reyes@example.org">
+        </div>
+        <div class="field">
+          <label for="r-phone">Phone</label>
+          <input id="r-phone" name="phone" placeholder="(312) 555-0100">
+        </div>
+      </div>
+      <div class="field">
+        <label for="r-relation">How you know them</label>
+        <input id="r-relation" name="relation" placeholder="Internship supervisor, 2025–26">
+        <p class="hint">Never printed. It is the note to yourself.</p>
+      </div>
+      <div class="actions">
+        <button type="submit" class="primary">Save reference</button>
+        <button type="reset">Clear</button>
+      </div>
+    </fieldset>
+  </form>
+</main>
+
+<!-- ──────────────────────────────────────────────────────────── versions ── -->
+<main id="panel-versions" class="panel" role="tabpanel" hidden>
+  <section class="listing">
+    <h2>Versions <span class="hint">of the document you're building</span></h2>
+    <p class="hint">
+      A version is a distinct state of the document, not a press of the button.
+      Generating hashes the render: unchanged gives you back the version it
+      already is, so sending one PDF to four people is four lines under one
+      version. The number and date travel in the PDF's metadata.
+    </p>
+    <div id="version-list"></div>
+    <datalist id="channels">
+      <option value="email"></option>
+      <option value="portal"></option>
+      <option value="post"></option>
+      <option value="in person"></option>
+    </datalist>
+  </section>
 </main>
 
 <script src="/app.js"></script>

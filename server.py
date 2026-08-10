@@ -19,6 +19,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -30,24 +31,33 @@ WEB = ROOT / "web"
 GENERATED = ROOT / "cv.generated.typ"
 
 KINDS = ("position", "education", "project", "publication")
-STYLES = ("entries", "skills", "profile")
+STYLES = ("entries", "itemized", "skills", "skill-lines", "references", "profile")
 
 ENTRY_FIELDS = ("kind", "org", "title", "note", "location",
                 "date_display", "start_ym", "end_ym", "is_current", "url", "summary")
 
+REFERENCE_FIELDS = ("name", "title", "org", "department", "address",
+                    "email", "phone", "relation")
+
+SEND_FIELDS = ("recipient", "org", "sent_on", "channel", "notes")
+
 # Which columns a PATCH may touch, and which of those are numbers.
 PATCHABLE = {
-    "entry":    set(ENTRY_FIELDS),
-    "bullet":   {"text", "sort_order"},
-    "skill":    {"name", "category", "detail", "sort_order"},
-    "section":  {"heading", "style", "sort_order", "include"},
-    "profile":  {"full_name", "legal_name", "pronouns", "summary"},
-    "document": {"slug", "title", "density", "paper", "notes"},
+    "entry":     set(ENTRY_FIELDS),
+    "bullet":    {"text", "sort_order"},
+    "skill":     {"name", "category", "detail", "sort_order"},
+    "reference": {*REFERENCE_FIELDS, "sort_order"},
+    "section":   {"heading", "style", "category", "sort_order", "include"},
+    "profile":   {"full_name", "legal_name", "pronouns", "summary"},
+    "document":  {"slug", "title", "density", "paper", "notes"},
+    "version":   {"notes"},
+    "send":      set(SEND_FIELDS),
 }
 NUMERIC = {"sort_order", "include", "is_current", "density", "section_id"}
 
 TABLE_OF = {"entries": "entry", "bullets": "bullet", "skills": "skill",
-            "sections": "section", "documents": "document"}
+            "sections": "section", "documents": "document",
+            "references": "reference", "versions": "version", "sends": "send"}
 
 MIME = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
         ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml"}
@@ -145,7 +155,12 @@ def get_library(con) -> dict:
         SELECT s.*, (SELECT COUNT(*) FROM entry_skill es WHERE es.skill_id = s.id) AS uses
         FROM skill s ORDER BY s.category, s.sort_order, s.id
     """)
-    return {"entries": entries, "skills": skills}
+    references = rows(con, """
+        SELECT r.*,
+               (SELECT COUNT(*) FROM doc_reference dr WHERE dr.reference_id = r.id) AS used_in
+        FROM reference r ORDER BY r.sort_order, r.id
+    """)
+    return {"entries": entries, "skills": skills, "references": references}
 
 
 def get_document(con, document_id: int) -> dict:
@@ -169,7 +184,34 @@ def get_document(con, document_id: int) -> dict:
         "skill_ids": [r["skill_id"] for r in
                       rows(con, "SELECT skill_id FROM doc_skill WHERE document_id = ? "
                                 "ORDER BY skill_id", (document_id,))],
+        "reference_ids": [r["reference_id"] for r in
+                          rows(con, "SELECT reference_id FROM doc_reference "
+                                    "WHERE document_id = ? ORDER BY reference_id",
+                               (document_id,))],
     }
+
+
+def get_versions(con, document_id: int) -> list[dict]:
+    """Newest first, each with the sends recorded against it.
+
+    `source` is deliberately left out — it is a few kilobytes per version and
+    the page only needs it when you ask to download one.
+    """
+    versions = rows(con, """
+        SELECT id, document_id, number, created_at, digest, notes,
+               LENGTH(source) AS bytes
+        FROM version WHERE document_id = ? ORDER BY number DESC
+    """, (document_id,))
+    by_id = {v["id"]: v for v in versions}
+    for v in versions:
+        v["sends"] = []
+    for s in rows(con, """
+        SELECT s.* FROM send s JOIN version v ON v.id = s.version_id
+        WHERE v.document_id = ?
+        ORDER BY s.version_id, COALESCE(s.sent_on, ''), s.id
+    """, (document_id,)):
+        by_id[s["version_id"]]["sends"].append(s)
+    return versions
 
 
 # --------------------------------------------------------------- API: write --
@@ -249,8 +291,8 @@ def place_entry(con, document_id: int, body: dict) -> dict:
                         (section_id,)).fetchone()
     if owner is None or owner["document_id"] != document_id:
         raise Bad("that heading belongs to a different document")
-    if owner["style"] != "entries":
-        raise Bad("only an 'entries' section can hold experience")
+    if owner["style"] not in ("entries", "itemized"):
+        raise Bad("only an 'entries' or 'itemized' section can hold experience")
 
     order = con.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM doc_entry "
                         "WHERE section_id = ?", (section_id,)).fetchone()[0]
@@ -367,6 +409,55 @@ def create_skill(con, body: dict) -> dict:
     return {"id": cur.lastrowid}
 
 
+def create_reference(con, body: dict) -> dict:
+    name = clean(body.get("name"))
+    if not name:
+        raise Bad("a reference needs a name")
+    order = body.get("sort_order")
+    if not str(order or "").strip():
+        order = con.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM reference").fetchone()[0]
+
+    values = [clean(body.get(f)) for f in REFERENCE_FIELDS]
+    columns = ", ".join(REFERENCE_FIELDS)
+    holes = ", ".join("?" for _ in REFERENCE_FIELDS)
+    with con:
+        cur = con.execute(
+            f"INSERT INTO reference ({columns}, sort_order) VALUES ({holes}, ?)",
+            [*values, int(order)])
+    return {"id": cur.lastrowid}
+
+
+def set_reference(con, document_id: int, reference_id: int, body: dict) -> dict:
+    """Name this referee in this document, or stop naming them. Opt-in, so a
+    new document lists nobody until you say so."""
+    with con:
+        if body.get("include"):
+            con.execute("INSERT OR IGNORE INTO doc_reference (document_id, reference_id) "
+                        "VALUES (?,?)", (document_id, reference_id))
+        else:
+            con.execute("DELETE FROM doc_reference WHERE document_id = ? AND reference_id = ?",
+                        (document_id, reference_id))
+    return {"reference_id": reference_id, "include": bool(body.get("include"))}
+
+
+def record_send(con, version_id: int, body: dict) -> dict:
+    recipient = clean(body.get("recipient"))
+    if not recipient:
+        raise Bad("who did it go to?")
+    if not con.execute("SELECT 1 FROM version WHERE id = ?", (version_id,)).fetchone():
+        raise Bad(f"no version with id {version_id}")
+
+    values = {f: clean(body.get(f)) for f in SEND_FIELDS}
+    values["recipient"] = recipient
+    values["sent_on"] = values["sent_on"] or today()
+    columns = ", ".join(SEND_FIELDS)
+    holes = ", ".join("?" for _ in SEND_FIELDS)
+    with con:
+        cur = con.execute(f"INSERT INTO send (version_id, {columns}) VALUES (?, {holes})",
+                          [version_id, *(values[f] for f in SEND_FIELDS)])
+    return {"id": cur.lastrowid}
+
+
 def add_bullet(con, entry_id: int, body: dict) -> dict:
     text = clean(body.get("text"))
     if not text:
@@ -436,6 +527,40 @@ def reorder(con, table: str, body: dict) -> dict:
 
 # ------------------------------------------------------------------ generate --
 
+def now_utc() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def today() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def record_version(con, document_id: int, source: str) -> dict:
+    """Return the version this render belongs to, creating one if it is new.
+
+    The digest is of the UNSTAMPED source, so it answers "did the document
+    change?" and not "did I press the button again?". Regenerating an unchanged
+    document therefore hands back the version it already is — which is what
+    makes the list a list of states rather than a list of clicks, and what lets
+    four sends hang off the one version they actually shared.
+    """
+    digest = cv_typst.digest_of(source)
+    latest = con.execute("SELECT * FROM version WHERE document_id = ? "
+                         "ORDER BY number DESC LIMIT 1", (document_id,)).fetchone()
+    if latest and latest["digest"] == digest:
+        return {"id": latest["id"], "number": latest["number"],
+                "created_at": latest["created_at"], "digest": digest, "new": False}
+
+    number = (latest["number"] + 1) if latest else 1
+    created_at = now_utc()
+    with con:
+        cur = con.execute(
+            "INSERT INTO version (document_id, number, created_at, digest, source) "
+            "VALUES (?,?,?,?,?)", (document_id, number, created_at, digest, source))
+    return {"id": cur.lastrowid, "number": number, "created_at": created_at,
+            "digest": digest, "new": True}
+
+
 def generate(con, body: dict) -> dict:
     document_id = as_number("section_id", body.get("document_id"))
     if not document_id:
@@ -445,8 +570,24 @@ def generate(con, body: dict) -> dict:
     except LookupError as e:
         raise Bad(str(e))
 
-    GENERATED.write_text(source)
-    result = {"typst": source, "path": GENERATED.name, "compiled": False,
+    # Version first, then re-render carrying its number — the file that lands
+    # on disk is the one whose metadata names the version it is.
+    version = record_version(con, document_id, source)
+    stamped = cv_typst.render(con, document_id, {
+        "version": version["number"],
+        "created_at": version["created_at"],
+        "digest": version["digest"],
+    })
+
+    # Keep the stamped text, so a version can be rebuilt as the file it was.
+    # Its digest still comes from the unstamped render above, which is what
+    # makes two identical documents compare equal.
+    with con:
+        con.execute("UPDATE version SET source = ? WHERE id = ?", (stamped, version["id"]))
+
+    GENERATED.write_text(stamped)
+    result = {"typst": stamped, "path": GENERATED.name, "compiled": False,
+              "version": version,
               "download": "/download/typ", "filename": download_name(con, document_id, "typ")}
 
     if body.get("compile"):
@@ -506,12 +647,18 @@ def route(con, method: str, path: str, body: dict):
             return get_profile(con)
         if n == 2 and tail[0] == "documents":
             return get_document(con, int(tail[1]))
+        if n == 3 and tail[0] == "documents" and tail[2] == "versions":
+            return get_versions(con, int(tail[1]))
 
     if method == "POST":
         if tail == ["entries"]:
             return create_entry(con, body)
         if tail == ["skills"]:
             return create_skill(con, body)
+        if tail == ["references"]:
+            return create_reference(con, body)
+        if n == 3 and tail[0] == "versions" and tail[2] == "sends":
+            return record_send(con, int(tail[1]), body)
         if tail == ["documents"]:
             return create_document(con, body)
         if tail == ["generate"]:
@@ -538,6 +685,8 @@ def route(con, method: str, path: str, body: dict):
             return set_bullet(con, int(tail[1]), int(tail[3]), body)
         if n == 4 and tail[0] == "documents" and tail[2] == "skills":
             return set_skill(con, int(tail[1]), int(tail[3]), body)
+        if n == 4 and tail[0] == "documents" and tail[2] == "references":
+            return set_reference(con, int(tail[1]), int(tail[3]), body)
         if n == 2 and tail[0] in TABLE_OF:
             return patch(con, TABLE_OF[tail[0]], int(tail[1]), body)
 
@@ -566,6 +715,8 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path.startswith("/api/"):
             self.api("GET", path, {})
+        elif path == "/download/version":
+            self.download_version()
         elif path.startswith("/download/"):
             self.download(path.rsplit("/", 1)[-1])
         else:
@@ -640,6 +791,33 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", mime)
         self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def download_version(self):
+        """Hand back the Typst of one stored version, exactly as it was written.
+
+        It comes out of the database, not off disk: `cv.generated.typ` is
+        whatever you generated last, while this is the file that went out.
+        """
+        wanted = parse_qs(urlparse(self.path).query).get("id", [""])[0]
+        row = None
+        if wanted.isdigit():
+            row = self.con.execute(
+                "SELECT v.number, v.source, d.slug FROM version v "
+                "JOIN document d ON d.id = v.document_id WHERE v.id = ?",
+                (int(wanted),)).fetchone()
+        if row is None:
+            self.send_error(404, "no such version")
+            return
+
+        data = row["source"].encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Disposition",
+                         f'attachment; filename="{row["slug"]}-v{row["number"]}.typ"')
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()

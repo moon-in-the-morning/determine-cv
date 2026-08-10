@@ -96,6 +96,25 @@ CREATE TABLE entry_skill (
   PRIMARY KEY (entry_id, skill_id)
 );
 
+--  Professional references. Printed as a stack of lines under a bold name, in
+--  the column order below — title, institution, department, address, email,
+--  phone. `address` may hold newlines; each becomes its own printed line.
+--
+--  `relation` is never printed. It is the reminder of who this person is to
+--  you, so a list of eight referees stays legible a year from now.
+CREATE TABLE reference (
+  id         INTEGER PRIMARY KEY,
+  name       TEXT NOT NULL,           -- "Dr. Helen Robbins"
+  title      TEXT,                    -- "Repatriation Director"
+  org        TEXT,                    -- "Field Museum of Natural History"
+  department TEXT,
+  address    TEXT,                    -- one line per newline
+  email      TEXT,
+  phone      TEXT,
+  relation   TEXT,                    -- not printed: how you know them
+  sort_order INTEGER NOT NULL DEFAULT 0
+);
+
 -- ====================================================== THE DOCUMENTS =======
 --  One row per CV or resume you keep. Deleting one removes its arrangement
 --  and touches no experience.
@@ -113,15 +132,28 @@ CREATE TABLE document (
 --  "Teaching" in the CV and "Work Experience" in a resume.
 --
 --  `style` says which cv-template.typ function renders the block:
---    'entries'  → #entry(...)[- bullets], or #item(note: ...)[...] without bullets
---    'skills'   → #skill("Category")[comma-separated names]
---    'profile'  → bare prose from profile.summary
+--    'entries'     → #entry(...)[- bullets], or #item(note: ...) without bullets
+--    'itemized'    → #line-item(date: ...)[one line, no bullets]
+--    'skills'      → #skill("Category")[comma-separated names]
+--    'skill-lines' → #skill-line("English", detail: "native proficiency")
+--    'references'  → #reference("Name", lines: (...))
+--    'profile'     → bare prose from profile.summary
+--
+--  'entries' and 'itemized' read the same rows — the difference is only how
+--  much of each row prints. Switching a heading between them is how you turn
+--  a described section into a listed one without retyping anything.
 CREATE TABLE section (
   id          INTEGER PRIMARY KEY,
   document_id INTEGER NOT NULL REFERENCES document(id) ON DELETE CASCADE,
   heading     TEXT NOT NULL,
   style       TEXT NOT NULL DEFAULT 'entries'
-                CHECK (style IN ('entries','skills','profile')),
+                CHECK (style IN ('entries','itemized','skills','skill-lines',
+                                 'references','profile')),
+  -- Skills sections only. NULL prints every skill ticked for the document;
+  -- naming a category prints just that one, which is what lets "Languages"
+  -- and "Technical Skills" be two headings over the same ticked pool instead
+  -- of two copies of it.
+  category    TEXT,
   sort_order  INTEGER NOT NULL DEFAULT 0,
   include     INTEGER NOT NULL DEFAULT 1 CHECK (include IN (0,1)),
   UNIQUE (document_id, heading)
@@ -158,6 +190,59 @@ CREATE TABLE doc_skill (
   PRIMARY KEY (document_id, skill_id)
 );
 
+-- Which referees a document names. Opt-in, like skills — most applications
+-- want a different three.
+CREATE TABLE doc_reference (
+  document_id  INTEGER NOT NULL REFERENCES document(id)  ON DELETE CASCADE,
+  reference_id INTEGER NOT NULL REFERENCES reference(id) ON DELETE CASCADE,
+  PRIMARY KEY (document_id, reference_id)
+);
+
+-- ======================================================== THE VERSIONS =======
+--  What you actually sent, and to whom.
+--
+--  A version is a DISTINCT STATE of a document, not a press of the button.
+--  Generating records the rendered Typst and its sha256; if that digest
+--  matches the newest version, you get that version back rather than a second
+--  row saying the same thing. So the list stays a list of real changes, and
+--  sending the same PDF to four search committees is four `send` rows against
+--  one version — which is the question you actually ask later.
+--
+--  `source` is the whole rendered document, stamped with its own version
+--  number — byte-for-byte the file that was written. A few kilobytes of text,
+--  and keeping it means an old version can be recompiled exactly, long after
+--  the rows it came from have been reworded.
+--
+--  `digest` hashes the UNSTAMPED render, not `source`. Otherwise the version
+--  number would be part of what is being compared and no two versions could
+--  ever match.
+
+CREATE TABLE version (
+  id          INTEGER PRIMARY KEY,
+  document_id INTEGER NOT NULL REFERENCES document(id) ON DELETE CASCADE,
+  number      INTEGER NOT NULL,        -- 1, 2, 3… within this document
+  created_at  TEXT NOT NULL,           -- UTC, 'YYYY-MM-DDTHH:MM:SSZ'
+  digest      TEXT NOT NULL,           -- sha256 of `source`
+  source      TEXT NOT NULL,           -- the exact Typst this version rendered to
+  notes       TEXT,                    -- "trimmed to two pages for the Getty"
+  UNIQUE (document_id, number)
+);
+
+CREATE INDEX version_document ON version(document_id, number DESC);
+
+-- One row per time this version went somewhere.
+CREATE TABLE send (
+  id         INTEGER PRIMARY KEY,
+  version_id INTEGER NOT NULL REFERENCES version(id) ON DELETE CASCADE,
+  recipient  TEXT NOT NULL,            -- person, committee, or posting
+  org        TEXT,
+  sent_on    TEXT,                     -- 'YYYY-MM-DD'
+  channel    TEXT,                     -- email · portal · post · in person
+  notes      TEXT
+);
+
+CREATE INDEX send_version ON send(version_id, sent_on, id);
+
 -- ---------------------------------------------------------------- rendering --
 --  One document, in print order. Every ORDER BY ends in a unique column, so
 --  the generated Typst is byte-identical run to run given the same rows.
@@ -191,3 +276,17 @@ WHERE de.include = 1 AND COALESCE(db.include, 1) = 1;
 CREATE VIEW v_skill AS
 SELECT ds.document_id, s.category, s.name, s.detail, s.sort_order
 FROM doc_skill ds JOIN skill s ON s.id = ds.skill_id;
+
+CREATE VIEW v_reference AS
+SELECT dr.document_id, r.id AS reference_id, r.name, r.title, r.org,
+       r.department, r.address, r.email, r.phone, r.sort_order
+FROM doc_reference dr JOIN reference r ON r.id = dr.reference_id;
+
+-- Where each version went. One row per send; a version with no sends does not
+-- appear, which is the point — this is the "what has actually gone out" view.
+CREATE VIEW v_sent AS
+SELECT d.slug AS document, v.number AS version, v.created_at,
+       s.sent_on, s.recipient, s.org, s.channel, s.notes
+FROM send s
+JOIN version  v ON v.id = s.version_id
+JOIN document d ON d.id = v.document_id;

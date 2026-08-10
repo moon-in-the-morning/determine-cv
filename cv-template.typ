@@ -53,6 +53,14 @@
 #let leading = 0.65em * density // space between lines within a paragraph
 #let para-gap = 0.8em * density // space between paragraphs
 #let bullet-gap = 0.75em * density // space between bullets in a list
+#let line-gap = 6pt * density // space between itemized one-liners
+#let stack-gap = 2.5pt * density // space between the stacked lines of a reference
+
+// Space between an itemized line's date and its text. This is a word space,
+// not a column: the date sits in the same text flow as everything after it,
+// so the extracted text reads "2018 Colloquium Chair, ..." on one line. A real
+// left-hand date column would extract as two interleaved streams.
+#let date-gap = 0.9em
 
 // Separator between date and location on the metadata line.
 #let meta-sep = "  ·  "
@@ -73,9 +81,20 @@
   margin: 0.85in,
   font: cv-font,
   size: base-size,
+  // Which cut of the document this is. Both go into the PDF's metadata and
+  // print nowhere on the page — see the Versions tab, which is what reads them.
+  version: none, // e.g. "3"
+  generated: none, // a `datetime`, e.g. datetime(year: 2026, month: 8, day: 10)
   body,
 ) = {
-  set document(title: name + " - Curriculum Vitae", author: name)
+  set document(
+    title: name + " - Curriculum Vitae",
+    author: name,
+    // PDF `Keywords`. `pdfinfo` and Preview's inspector both show it, so the
+    // version travels with the file after it leaves this machine.
+    keywords: if version == none { () } else { ("cv_db", "version " + version) },
+    date: if generated == none { auto } else { generated },
+  )
   set page(paper: paper, margin: margin)
 
   set text(
@@ -195,12 +214,64 @@
   }
 ]
 
+// ----------------------------------------------------------------- itemized
+
+// One line of a receipt: a date, then what it was. No bullets, no second line.
+//
+//   2018   Colloquium Chair, Department of Anthropology
+//   2017   Fulbright DDRA Grant Reviewer, National Fulbright Foundation
+//
+// Use this for awards, service, affiliations, talks — anything where the
+// wording is already the whole description and a bulleted block would be three
+// times the height for the same information.
+//
+// The date is set in the same paragraph as the body, so a line that wraps
+// starts again at the left margin rather than under a hanging indent. That is
+// deliberate: see the note on `date-gap`.
+#let line-item(body, date: none) = block(
+  width: 100%,
+  above: line-gap,
+  below: 0pt,
+  breakable: false,
+)[
+  #if date != none { text(fill: ink-soft, date) + h(date-gap) }
+  #body
+]
+
 // -------------------------------------------------------------------- skills
 
 // One skill row: bold category, then a comma-separated list.
 // Kept as running text (not a grid of chips) so every term extracts.
 #let skill(category, items) = block(width: 100%, above: 8pt * density, below: 0pt)[
   #text(weight: "bold", category)#text[: ]#items
+]
+
+// The same information one-per-line, which is how a languages block usually
+// wants to read:  English – native proficiency
+#let skill-line(name, detail: none) = block(
+  width: 100%,
+  above: 4pt * density,
+  below: 0pt,
+)[
+  #name#if detail != none [ #sym.dash.en #detail]
+]
+
+// --------------------------------------------------------------- references
+
+// A professional reference. `lines` are printed in the order given, each on
+// its own line under the name — title, institution, department, street, city,
+// email, phone. Stacked rather than gridded, so the extracted text is the
+// block you see, in the order you see it.
+#let reference(name, lines: ()) = block(
+  width: 100%,
+  above: 11pt * density,
+  below: 0pt,
+  breakable: false,
+)[
+  #block(below: 0pt, text(weight: "bold", name))
+  #for line in lines {
+    block(above: stack-gap, below: 0pt, text(size: 10pt, fill: ink-soft, line))
+  }
 ]
 
 // --------------------------------------------------------- publications etc.

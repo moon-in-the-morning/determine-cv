@@ -4,6 +4,15 @@
 rows in, byte-identical file out. Every ORDER BY ends in a unique column so
 nothing is left to SQLite's discretion, which is the point of the exercise.
 
+That purity is what makes versioning possible rather than the other way round:
+because the output depends on nothing but the rows, the sha256 of this file
+answers "has the document actually changed?" — and a clock, a hostname, or a
+run counter in the output would have destroyed that. So `stamp` is a separate,
+explicit argument. Called without one you get the same bytes you got yesterday;
+called with one you get those bytes plus a header naming the version. The
+server hands the stamp in when it records a version, and `digest_of` hashes the
+unstamped text, never the stamped.
+
 Nothing here talks to HTTP, so it can be checked by diffing its output rather
 than by clicking through a browser:
 
@@ -12,9 +21,11 @@ than by clicking through a browser:
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 
-HEADER = '#import "cv-template.typ": cv, section, entry, skill, item'
+HEADER = ('#import "cv-template.typ": cv, section, entry, item, '
+          'line-item, skill, skill-line, reference')
 
 # Typst markup characters that would otherwise be read as syntax. Backslash
 # first, or it would escape the backslashes added afterwards.
@@ -65,7 +76,7 @@ def fetch(con: sqlite3.Connection, document_id: int) -> dict:
         "document": dict(document),
         "profile": dict(profile) if profile else {},
         "contacts": q("SELECT kind, value, display FROM contact ORDER BY sort_order, id"),
-        "sections": q("""SELECT id, heading, style, sort_order FROM section
+        "sections": q("""SELECT id, heading, style, category, sort_order FROM section
                          WHERE document_id = ? AND include = 1
                          ORDER BY sort_order, id""", document_id),
         "entries": q("""SELECT e.*, de.section_id, de.sort_order AS entry_order
@@ -88,12 +99,18 @@ def fetch(con: sqlite3.Connection, document_id: int) -> dict:
                        WHERE ds.document_id = ?
                        ORDER BY (SELECT MIN(x.id) FROM skill x WHERE x.category = s.category),
                                 s.sort_order, s.id""", document_id),
+        "references": q("""SELECT r.name, r.title, r.org, r.department,
+                                  r.address, r.email, r.phone
+                           FROM doc_reference dr JOIN reference r ON r.id = dr.reference_id
+                           WHERE dr.document_id = ?
+                           ORDER BY r.sort_order, r.id""", document_id),
     }
 
 
 # -------------------------------------------------------------------- blocks --
 
-def render_header(profile: dict, contacts: list[dict], document: dict) -> str:
+def render_header(profile: dict, contacts: list[dict], document: dict,
+                  stamp: dict | None = None) -> str:
     lines = ["#show: cv.with(", f'  name: "{esc_string(profile.get("full_name", ""))}",']
 
     subtitle = "  •  ".join(filter(None, [
@@ -115,6 +132,13 @@ def render_header(profile: dict, contacts: list[dict], document: dict) -> str:
 
     if document.get("paper") and document["paper"] != "us-letter":
         lines.append(f'  paper: "{esc_string(document["paper"])}",')
+
+    # Goes into the PDF's metadata, not onto the page.
+    if stamp:
+        lines.append(f'  version: "{stamp["version"]}",')
+        year, month, day = stamp["created_at"][:10].split("-")
+        lines.append(f"  generated: datetime(year: {int(year)}, "
+                     f"month: {int(month)}, day: {int(day)}),")
 
     lines.append(")")
     return "\n".join(lines)
@@ -157,6 +181,36 @@ def _item(note: str, body: str) -> str:
     return f"{opener}\n  {body}\n]"
 
 
+def render_line_item(e: dict) -> str:
+    """One line: the date, then what it was. Nothing else.
+
+    Deliberately narrower than #entry. The note and the bullets stay in the
+    library and print the moment the heading is switched back to 'entries' —
+    an itemized section is a way of *showing less*, not of storing less.
+    """
+    head = e["summary"] or e["title"] or ""
+    tail = ", ".join(part for part in (e["org"], e["location"]) if part)
+    body = esc_markup(join_tail(head, tail))
+    opener = (f'#line-item(date: "{esc_string(e["date_display"])}")['
+              if e["date_display"] else "#line-item[")
+    return f"{opener}{body}]"
+
+
+def join_tail(head: str, tail: str) -> str:
+    """Attach the venue to the thing, with punctuation that reads either way.
+
+    A role is a phrase and wants a comma — "Colloquium Chair, Anthropology".
+    A title is already a sentence and does not — a comma after a full stop or
+    a closing quote is the tell that a line was machine-assembled.
+    """
+    if not head:
+        return tail
+    if not tail:
+        return head
+    ends_sentence = head.rstrip().rstrip('"”\'’').endswith((".", "?", "!"))
+    return f"{head} {tail}" if ends_sentence else f"{head}, {tail}"
+
+
 def render_skills(skills: list[dict]) -> str:
     """Group by category, join with commas, detail in parentheses."""
     groups: dict[str, list[str]] = {}
@@ -167,15 +221,63 @@ def render_skills(skills: list[dict]) -> str:
                      for cat, names in groups.items())
 
 
+def render_skill_lines(skills: list[dict]) -> str:
+    """One per line: `English – native proficiency`.
+
+    The category is not printed. Under this style the heading is doing that
+    job — a section headed "Languages" holding the Languages category would
+    otherwise say so twice.
+    """
+    return "\n".join(
+        (f'#skill-line(detail: [{esc_markup(s["detail"])}])' if s["detail"]
+         else "#skill-line")
+        + f'[{esc_markup(s["name"])}]'
+        for s in skills)
+
+
+def render_reference(r: dict) -> str:
+    """Bold name, then each remaining field on its own line, in column order.
+
+    `address` may hold several lines; they stay separate, so a street and a
+    city do not run together into one long line.
+    """
+    lines = [r["title"], r["org"], r["department"],
+             *str(r["address"] or "").splitlines(), r["email"], r["phone"]]
+    stacked = "".join(f'\n    [{esc_markup(l)}],' for l in lines if str(l).strip())
+    if not stacked:
+        return f'#reference[{esc_markup(r["name"])}]'
+    return f'#reference([{esc_markup(r["name"])}], lines: ({stacked}\n  ))'
+
+
 # ------------------------------------------------------------------ document --
 
-def render(con: sqlite3.Connection, document_id: int) -> str:
+def digest_of(source: str) -> str:
+    """The sha256 that decides whether this is a new version.
+
+    Always hash the UNSTAMPED render. Hashing a stamped one would fold the
+    version number into the digest and every generate would look like a change.
+    """
+    return hashlib.sha256(source.encode()).hexdigest()
+
+
+def render(con: sqlite3.Connection, document_id: int, stamp: dict | None = None) -> str:
+    """`stamp` is {"version": 3, "created_at": "...Z", "digest": "..."} or None.
+
+    Without one the output is a pure function of the rows. With one it is that
+    same output plus two comment lines and two metadata arguments.
+    """
     data = fetch(con, document_id)
     bullets: dict[int, list[str]] = {}
     for b in data["bullets"]:
         bullets.setdefault(b["entry_id"], []).append(b["text"])
 
-    out = [HEADER, "", render_header(data["profile"], data["contacts"], data["document"])]
+    out = []
+    if stamp:
+        out += [f'// {data["document"]["slug"]} · version {stamp["version"]}',
+                f'// generated {stamp["created_at"]} · sha256 {stamp["digest"][:16]}',
+                ""]
+    out += [HEADER, "",
+            render_header(data["profile"], data["contacts"], data["document"], stamp)]
 
     for sec in data["sections"]:
         blocks = []
@@ -183,10 +285,19 @@ def render(con: sqlite3.Connection, document_id: int) -> str:
         if sec["style"] == "profile":
             if data["profile"].get("summary"):
                 blocks.append(esc_markup(data["profile"]["summary"]))
-        elif sec["style"] == "skills":
-            rendered = render_skills(data["skills"])
+        elif sec["style"] in ("skills", "skill-lines"):
+            # NULL category means every ticked skill; naming one narrows to it.
+            chosen = [s for s in data["skills"]
+                      if not sec["category"] or s["category"] == sec["category"]]
+            rendered = (render_skills(chosen) if sec["style"] == "skills"
+                        else render_skill_lines(chosen))
             if rendered:
                 blocks.append(rendered)
+        elif sec["style"] == "references":
+            blocks += [render_reference(r) for r in data["references"]]
+        elif sec["style"] == "itemized":
+            blocks += [render_line_item(e) for e in data["entries"]
+                       if e["section_id"] == sec["id"]]
         else:
             for e in data["entries"]:
                 if e["section_id"] == sec["id"]:

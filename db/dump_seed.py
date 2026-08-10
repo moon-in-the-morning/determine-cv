@@ -25,7 +25,8 @@ OUT = HERE / "seed.sql"
 
 # Insert order matters: parents before the rows that reference them.
 TABLES = ["profile", "contact", "entry", "bullet", "skill", "entry_skill",
-          "document", "section", "doc_entry", "doc_bullet", "doc_skill"]
+          "reference", "document", "section", "doc_entry", "doc_bullet",
+          "doc_skill", "doc_reference", "version", "send"]
 
 HEADER = """\
 -- ============================================================================
@@ -56,7 +57,8 @@ def main() -> None:
         keys = {"entry_skill": "entry_id, skill_id",
                 "doc_entry": "document_id, entry_id",
                 "doc_bullet": "document_id, bullet_id",
-                "doc_skill": "document_id, skill_id"}
+                "doc_skill": "document_id, skill_id",
+                "doc_reference": "document_id, reference_id"}
         order = keys.get(table, "id")
         rows = con.execute(f"SELECT * FROM {table} ORDER BY {order}").fetchall()
         if not rows:
