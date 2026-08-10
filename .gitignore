@@ -1,2 +1,21 @@
+# Generated documents — rebuild with the Generate button, or:
+#   python3 -c "import sqlite3, cv_typst; print(cv_typst.render(sqlite3.connect('db/cv.db')))"
+cv.generated.typ
+cv.generated.pdf
+
+# Typst build output
+*.pdf
+
+# Database backups left by db/migrate_to_single_document.py
+db/*.db.backup-*
+db/*.db.pre-*
+db/*.db.migrating
+
+# Other people's CVs, collected as structural samples — not ours to republish
+reference-cvs/
+
+# Python
+__pycache__/
+
 # macOS
 .DS_Store

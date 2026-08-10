@@ -3,26 +3,35 @@
 -- ----------------------------------------------------------------------------
 --  SQLite. One file, no server, ships with macOS and Python.
 --
---  THE CENTRAL IDEA: a CV is not a document, it's a *query*. The tables below
---  hold your experience once; a `variant` is a saved selection and ordering of
---  that experience under a set of headings. The full CV and a targeted resume
---  are two variants over the same rows.
+--  THE FIRST IDEA: one library, many documents. Everything you have ever done
+--  lives once in `entry`, `bullet`, and `skill` — that half of the schema has
+--  no idea any document exists. A `document` is a saved arrangement over that
+--  library: its own headings, its own selection, its own order. The full CV
+--  and a targeted resume are two documents over the same rows, and neither
+--  owns the experience.
+--
+--  So the same teaching assistantship sits under "Teaching" in one document
+--  and "Work Experience" in another, with one copy of the bullets. Fix a typo
+--  once and every document has it.
+--
+--  A new document starts EMPTY: no headings, nothing selected. You add the
+--  headings you want and pull in the experience that belongs under them.
 --
 --  THE SECOND IDEA: positions, education, projects, and publications all
---  render identically — a bold title line, an italic date/location line, an
---  optional note line, and bullets. So they are ONE table (`entry`) with a
---  `kind` column, mirroring the `entry()` function in cv-template.typ. That
---  keeps real foreign keys everywhere and lets one query render a document.
+--  render from the same handful of fields — a bold title line, an italic
+--  date/location line, an optional note line, and bullets. So they are ONE
+--  table (`entry`) with a `kind` column, mirroring the `entry()` function in
+--  cv-template.typ.
 -- ============================================================================
 
 PRAGMA foreign_keys = ON;
 
--- ------------------------------------------------------------------- person --
--- Effectively a singleton, but keyed so a variant can point at it.
+-- ======================================================== THE LIBRARY ========
+--  Your experience. Nothing here refers to a document.
 
 CREATE TABLE profile (
   id          INTEGER PRIMARY KEY,
-  full_name   TEXT NOT NULL,          -- the name at the top: "Ada Lovelace"
+  full_name   TEXT NOT NULL,          -- the name at the top
   legal_name  TEXT,                   -- shown in the subtitle line, if used
   pronouns    TEXT,
   summary     TEXT                    -- the Profile paragraph
@@ -33,19 +42,15 @@ CREATE TABLE contact (
   id         INTEGER PRIMARY KEY,
   profile_id INTEGER NOT NULL REFERENCES profile(id) ON DELETE CASCADE,
   kind       TEXT NOT NULL CHECK (kind IN ('email','phone','city','link')),
-  value      TEXT NOT NULL,           -- the mailto:/https:/ target, or raw text
+  value      TEXT NOT NULL,           -- the mailto:/https: target, or raw text
   display    TEXT,                    -- what's printed, if different from value
   sort_order INTEGER NOT NULL DEFAULT 0
 );
 
--- ------------------------------------------------------------------ entries --
---  Every resume line-item, regardless of type.
---
---  DATES: CV dates are prose ("Autumn 2025", "Expected June 2027", "2018 –
---  2019"), so storing them as DATE loses the wording and gains nothing. Keep
---  BOTH: `date_display` is printed verbatim; `start_ym`/`end_ym` are sortable
---  'YYYY-MM' keys used only for reverse-chronological ordering.
-
+--  DATES: CV dates are prose ("Autumn 2025", "Expected June 2027"), so storing
+--  them as DATE loses the wording and gains nothing. Keep BOTH: `date_display`
+--  is printed verbatim; `start_ym`/`end_ym` are sortable 'YYYY-MM' keys used
+--  only for offering entries in a sensible order.
 CREATE TABLE entry (
   id           INTEGER PRIMARY KEY,
   kind         TEXT NOT NULL
@@ -64,9 +69,8 @@ CREATE TABLE entry (
 
 CREATE INDEX entry_kind_start ON entry(kind, start_ym DESC);
 
--- Bullets are a POOL per entry, not a fixed list. A variant picks from the
--- pool (see variant_bullet), so a reworded bullet for a targeted resume is
--- just another row here — the original stays untouched.
+-- Bullets are a POOL per entry. Reword one for a particular application by
+-- adding another row; each document chooses which it prints.
 CREATE TABLE bullet (
   id         INTEGER PRIMARY KEY,
   entry_id   INTEGER NOT NULL REFERENCES entry(id) ON DELETE CASCADE,
@@ -76,111 +80,114 @@ CREATE TABLE bullet (
 
 CREATE INDEX bullet_entry ON bullet(entry_id, sort_order);
 
--- ------------------------------------------------------------------- skills --
-
 CREATE TABLE skill (
   id         INTEGER PRIMARY KEY,
   name       TEXT NOT NULL UNIQUE,
-  category   TEXT NOT NULL,           -- the bold label in the Skills section
+  category   TEXT NOT NULL,           -- the bold label printed by #skill()
   detail     TEXT,                    -- e.g. "A2 Levantine" for a language
   sort_order INTEGER NOT NULL DEFAULT 0
 );
 
--- The many-to-many you asked about. Because positions, projects, and
--- publications are all `entry` rows, ONE join table covers every correlation:
--- which skills a position exercised, which a project used.
+-- Which position exercised which skill. Never printed — it is how you find the
+-- experience that backs a skill when a posting asks you to evidence one.
 CREATE TABLE entry_skill (
   entry_id INTEGER NOT NULL REFERENCES entry(id)  ON DELETE CASCADE,
   skill_id INTEGER NOT NULL REFERENCES skill(id)  ON DELETE CASCADE,
   PRIMARY KEY (entry_id, skill_id)
 );
 
--- ------------------------------------------------------------------ variants --
---  One row per document you actually produce.
+-- ====================================================== THE DOCUMENTS =======
+--  One row per CV or resume you keep. Deleting one removes its arrangement
+--  and touches no experience.
 
-CREATE TABLE variant (
-  id         INTEGER PRIMARY KEY,
-  profile_id INTEGER NOT NULL REFERENCES profile(id) ON DELETE CASCADE,
-  slug       TEXT NOT NULL UNIQUE,    -- 'full-cv', 'short-resume'
-  title      TEXT NOT NULL,
-  density    REAL NOT NULL DEFAULT 1.0,  -- feeds cv-template.typ
-  paper      TEXT NOT NULL DEFAULT 'us-letter',
-  notes      TEXT
+CREATE TABLE document (
+  id      INTEGER PRIMARY KEY,
+  slug    TEXT NOT NULL UNIQUE,       -- 'full-cv', 'ace-usfws'
+  title   TEXT NOT NULL,
+  density REAL NOT NULL DEFAULT 1.0,  -- 0.8 dense · 1.0 default · 1.15 airy
+  paper   TEXT NOT NULL DEFAULT 'us-letter',
+  notes   TEXT                        -- what this one is for
 );
 
--- Headings belong to the VARIANT, not the data — that's what lets the Field
--- Museum sit under "Research Experience" in one document and "Work
--- Experience" in another.
+--  Headings belong to the DOCUMENT. That is what lets one entry sit under
+--  "Teaching" in the CV and "Work Experience" in a resume.
+--
+--  `style` says which cv-template.typ function renders the block:
+--    'entries'  → #entry(...)[- bullets], or #item(note: ...)[...] without bullets
+--    'skills'   → #skill("Category")[comma-separated names]
+--    'profile'  → bare prose from profile.summary
 CREATE TABLE section (
-  id         INTEGER PRIMARY KEY,
-  variant_id INTEGER NOT NULL REFERENCES variant(id) ON DELETE CASCADE,
-  heading    TEXT NOT NULL,
-  sort_order INTEGER NOT NULL DEFAULT 0,
-  UNIQUE (variant_id, heading)
+  id          INTEGER PRIMARY KEY,
+  document_id INTEGER NOT NULL REFERENCES document(id) ON DELETE CASCADE,
+  heading     TEXT NOT NULL,
+  style       TEXT NOT NULL DEFAULT 'entries'
+                CHECK (style IN ('entries','skills','profile')),
+  sort_order  INTEGER NOT NULL DEFAULT 0,
+  include     INTEGER NOT NULL DEFAULT 1 CHECK (include IN (0,1)),
+  UNIQUE (document_id, heading)
 );
 
--- Which entries appear in which document, under which heading, in what order.
-CREATE TABLE variant_entry (
-  variant_id INTEGER NOT NULL REFERENCES variant(id) ON DELETE CASCADE,
-  entry_id   INTEGER NOT NULL REFERENCES entry(id)   ON DELETE CASCADE,
-  section_id INTEGER NOT NULL REFERENCES section(id) ON DELETE CASCADE,
-  sort_order INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (variant_id, entry_id)
+-- Which experience appears in which document, under which heading, in what
+-- order. An entry with no row here simply isn't in that document.
+CREATE TABLE doc_entry (
+  document_id INTEGER NOT NULL REFERENCES document(id) ON DELETE CASCADE,
+  entry_id    INTEGER NOT NULL REFERENCES entry(id)    ON DELETE CASCADE,
+  section_id  INTEGER NOT NULL REFERENCES section(id)  ON DELETE CASCADE,
+  sort_order  INTEGER NOT NULL DEFAULT 0,
+  include     INTEGER NOT NULL DEFAULT 1 CHECK (include IN (0,1)),
+  PRIMARY KEY (document_id, entry_id)
 );
 
--- OPTIONAL per-variant bullet selection.
--- Rule: if a variant has NO rows here for a given entry, that entry renders
--- ALL of its bullets in their natural order. Add rows only when a document
--- needs a subset or a different order. Keeps seeds short.
-CREATE TABLE variant_bullet (
-  variant_id INTEGER NOT NULL REFERENCES variant(id) ON DELETE CASCADE,
-  bullet_id  INTEGER NOT NULL REFERENCES bullet(id)  ON DELETE CASCADE,
-  sort_order INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (variant_id, bullet_id)
+CREATE INDEX doc_entry_section ON doc_entry(section_id, sort_order);
+
+-- Bullet suppression, per document. A bullet with NO row here PRINTS — so
+-- pulling an entry into a document brings all of its bullets, and rows appear
+-- only where you have cut one.
+CREATE TABLE doc_bullet (
+  document_id INTEGER NOT NULL REFERENCES document(id) ON DELETE CASCADE,
+  bullet_id   INTEGER NOT NULL REFERENCES bullet(id)   ON DELETE CASCADE,
+  include     INTEGER NOT NULL DEFAULT 0 CHECK (include IN (0,1)),
+  PRIMARY KEY (document_id, bullet_id)
 );
 
--- Which skills a variant shows. A federal-facing resume may want a "Data
--- practice" category where the full CV wants "Organizational".
-CREATE TABLE variant_skill (
-  variant_id INTEGER NOT NULL REFERENCES variant(id) ON DELETE CASCADE,
-  skill_id   INTEGER NOT NULL REFERENCES skill(id)   ON DELETE CASCADE,
-  PRIMARY KEY (variant_id, skill_id)
+-- Which skills a document prints. Unlike bullets this is opt-in: a new
+-- document starts with none.
+CREATE TABLE doc_skill (
+  document_id INTEGER NOT NULL REFERENCES document(id) ON DELETE CASCADE,
+  skill_id    INTEGER NOT NULL REFERENCES skill(id)    ON DELETE CASCADE,
+  PRIMARY KEY (document_id, skill_id)
 );
 
--- ----------------------------------------------------------------- rendering --
---  One view per document shape. Ordering is fully determined here, so the
---  generated Typst is byte-identical run to run given the same rows.
+-- ---------------------------------------------------------------- rendering --
+--  One document, in print order. Every ORDER BY ends in a unique column, so
+--  the generated Typst is byte-identical run to run given the same rows.
+
+CREATE VIEW v_section AS
+SELECT s.document_id, d.slug AS document, s.id AS section_id,
+       s.heading, s.style, s.sort_order
+FROM section s JOIN document d ON d.id = s.document_id
+WHERE s.include = 1;
 
 CREATE VIEW v_entry AS
 SELECT
-  v.slug           AS variant,
-  s.sort_order     AS section_order,
-  s.heading        AS heading,
-  ve.sort_order    AS entry_order,
-  e.id             AS entry_id,
-  e.kind, e.org, e.title, e.note, e.location,
-  e.date_display, e.url, e.summary
-FROM variant_entry ve
-JOIN variant v ON v.id = ve.variant_id
-JOIN section s ON s.id = ve.section_id
-JOIN entry   e ON e.id = ve.entry_id;
+  d.id AS document_id, d.slug AS document,
+  s.sort_order AS section_order, s.heading, s.id AS section_id,
+  de.sort_order AS entry_order, e.id AS entry_id,
+  e.kind, e.org, e.title, e.note, e.location, e.date_display, e.url, e.summary
+FROM doc_entry de
+JOIN document d ON d.id = de.document_id
+JOIN section  s ON s.id = de.section_id
+JOIN entry    e ON e.id = de.entry_id
+WHERE de.include = 1 AND s.include = 1 AND s.style = 'entries';
 
--- Applies the "no rows means all bullets" fallback described above.
 CREATE VIEW v_bullet AS
-SELECT
-  v.slug AS variant,
-  b.entry_id,
-  b.id   AS bullet_id,
-  b.text,
-  COALESCE(vb.sort_order, b.sort_order) AS sort_order
-FROM bullet b
-JOIN entry e   ON e.id = b.entry_id
-JOIN variant v ON 1 = 1
-LEFT JOIN variant_bullet vb
-       ON vb.bullet_id = b.id AND vb.variant_id = v.id
-WHERE vb.bullet_id IS NOT NULL
-   OR NOT EXISTS (
-        SELECT 1 FROM variant_bullet x
-        JOIN bullet b2 ON b2.id = x.bullet_id
-        WHERE x.variant_id = v.id AND b2.entry_id = b.entry_id
-      );
+SELECT de.document_id, b.entry_id, b.id AS bullet_id, b.text, b.sort_order
+FROM doc_entry de
+JOIN bullet b ON b.entry_id = de.entry_id
+LEFT JOIN doc_bullet db
+       ON db.document_id = de.document_id AND db.bullet_id = b.id
+WHERE de.include = 1 AND COALESCE(db.include, 1) = 1;
+
+CREATE VIEW v_skill AS
+SELECT ds.document_id, s.category, s.name, s.detail, s.sort_order
+FROM doc_skill ds JOIN skill s ON s.id = ds.skill_id;

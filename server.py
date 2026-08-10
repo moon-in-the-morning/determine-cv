@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cv_db — local entry form.
+"""cv_db — experience library, saved documents, and a Typst generator.
 
 A tiny JSON API over db/cv.db plus the static files in web/. Standard library
 only: no venv, no npm, nothing to install. Run it, open the page, type.
@@ -14,28 +14,43 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import shutil
 import sqlite3
+import subprocess
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
+
+import cv_typst          # named so it can't collide with the `typst` PyPI package
 
 ROOT = Path(__file__).resolve().parent
 WEB = ROOT / "web"
+GENERATED = ROOT / "cv.generated.typ"
 
 KINDS = ("position", "education", "project", "publication")
+STYLES = ("entries", "skills", "profile")
 
-# Columns the client may set on an entry, in schema order.
-ENTRY_FIELDS = (
-    "kind", "org", "title", "note", "location",
-    "date_display", "start_ym", "end_ym", "is_current", "url", "summary",
-)
+ENTRY_FIELDS = ("kind", "org", "title", "note", "location",
+                "date_display", "start_ym", "end_ym", "is_current", "url", "summary")
 
-MIME = {
-    ".html": "text/html; charset=utf-8",
-    ".css": "text/css; charset=utf-8",
-    ".js": "text/javascript; charset=utf-8",
-    ".svg": "image/svg+xml",
+# Which columns a PATCH may touch, and which of those are numbers.
+PATCHABLE = {
+    "entry":    set(ENTRY_FIELDS),
+    "bullet":   {"text", "sort_order"},
+    "skill":    {"name", "category", "detail", "sort_order"},
+    "section":  {"heading", "style", "sort_order", "include"},
+    "profile":  {"full_name", "legal_name", "pronouns", "summary"},
+    "document": {"slug", "title", "density", "paper", "notes"},
 }
+NUMERIC = {"sort_order", "include", "is_current", "density", "section_id"}
+
+TABLE_OF = {"entries": "entry", "bullets": "bullet", "skills": "skill",
+            "sections": "section", "documents": "document"}
+
+MIME = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
+        ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml"}
 
 
 class Bad(Exception):
@@ -63,9 +78,14 @@ def clean(value) -> str | None:
     return text or None
 
 
-def next_order(con, table, column, key) -> int:
-    sql = f"SELECT COALESCE(MAX(sort_order), 0) + 1 FROM {table} WHERE {column} = ?"
-    return con.execute(sql, (key,)).fetchone()[0]
+def as_number(field: str, value):
+    if value in (None, ""):
+        return None
+    return float(value) if field == "density" else int(value)
+
+
+def slugify(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-") or "document"
 
 
 # ---------------------------------------------------------------- API: read --
@@ -73,64 +93,219 @@ def next_order(con, table, column, key) -> int:
 def get_meta(con) -> dict:
     return {
         "kinds": list(KINDS),
+        "styles": list(STYLES),
         "categories": [r["category"] for r in
                        rows(con, "SELECT DISTINCT category FROM skill ORDER BY category")],
         "orgs": [r["org"] for r in
                  rows(con, "SELECT DISTINCT org FROM entry WHERE org IS NOT NULL ORDER BY org")],
-        "variants": rows(con, "SELECT id, slug, title FROM variant ORDER BY id"),
-        "sections": rows(con, "SELECT id, variant_id, heading FROM section "
-                              "ORDER BY variant_id, sort_order"),
+        "profile": get_profile(con),
+        "documents": get_documents(con),
     }
 
 
-def get_entries(con) -> list[dict]:
+def get_profile(con) -> dict:
+    row = con.execute("SELECT * FROM profile WHERE id = 1").fetchone()
+    return dict(row) if row else {}
+
+
+def get_documents(con) -> list[dict]:
+    return rows(con, """
+        SELECT d.*,
+               (SELECT COUNT(*) FROM section   s  WHERE s.document_id  = d.id) AS sections,
+               (SELECT COUNT(*) FROM doc_entry de WHERE de.document_id = d.id) AS entries
+        FROM document d ORDER BY d.id
+    """)
+
+
+def get_library(con) -> dict:
+    """Every entry and skill you have, with no reference to any document."""
     entries = rows(con, """
-        SELECT id, kind, org, title, note, location, date_display,
-               start_ym, end_ym, is_current, url, summary
-        FROM entry
-        ORDER BY kind, COALESCE(start_ym, '') DESC, id DESC
+        SELECT * FROM entry
+        ORDER BY COALESCE(start_ym, '') DESC, id DESC
     """)
     by_id = {e["id"]: e for e in entries}
     for e in entries:
-        e["bullets"] = []
-        e["skills"] = []
-        e["variants"] = []
+        e["bullets"], e["skills"], e["used_in"] = [], [], []
 
     for b in rows(con, "SELECT id, entry_id, text, sort_order FROM bullet "
                        "ORDER BY entry_id, sort_order, id"):
         by_id[b["entry_id"]]["bullets"].append(b)
 
-    for s in rows(con, """
-        SELECT es.entry_id, s.id, s.name, s.category
-        FROM entry_skill es JOIN skill s ON s.id = es.skill_id
-        ORDER BY es.entry_id, s.category, s.name
-    """):
+    for s in rows(con, """SELECT es.entry_id, s.id, s.name, s.category
+                          FROM entry_skill es JOIN skill s ON s.id = es.skill_id
+                          ORDER BY es.entry_id, s.category, s.name"""):
         by_id[s["entry_id"]]["skills"].append(s)
 
-    for v in rows(con, """
-        SELECT ve.entry_id, v.slug, sec.heading
-        FROM variant_entry ve
-        JOIN variant v   ON v.id = ve.variant_id
-        JOIN section sec ON sec.id = ve.section_id
-        ORDER BY ve.entry_id, v.id
-    """):
-        by_id[v["entry_id"]]["variants"].append(v)
+    for u in rows(con, """SELECT de.entry_id, d.id, d.title
+                          FROM doc_entry de JOIN document d ON d.id = de.document_id
+                          ORDER BY de.entry_id, d.id"""):
+        by_id[u["entry_id"]]["used_in"].append(u)
 
-    return entries
-
-
-def get_skills(con) -> list[dict]:
-    return rows(con, """
-        SELECT s.id, s.name, s.category, s.detail, s.sort_order,
-               (SELECT COUNT(*) FROM entry_skill es WHERE es.skill_id = s.id) AS uses
-        FROM skill s
-        ORDER BY s.category, s.sort_order, s.name
+    skills = rows(con, """
+        SELECT s.*, (SELECT COUNT(*) FROM entry_skill es WHERE es.skill_id = s.id) AS uses
+        FROM skill s ORDER BY s.category, s.sort_order, s.id
     """)
+    return {"entries": entries, "skills": skills}
+
+
+def get_document(con, document_id: int) -> dict:
+    """One document's arrangement: its headings, what sits under them, and
+    which bullets it has cut. The experience itself comes from the library."""
+    doc = con.execute("SELECT * FROM document WHERE id = ?", (document_id,)).fetchone()
+    if doc is None:
+        raise Bad(f"no document with id {document_id}")
+
+    return {
+        "document": dict(doc),
+        "sections": rows(con, "SELECT * FROM section WHERE document_id = ? "
+                              "ORDER BY sort_order, id", (document_id,)),
+        "placements": rows(con, "SELECT entry_id, section_id, sort_order, include "
+                                "FROM doc_entry WHERE document_id = ? "
+                                "ORDER BY section_id, sort_order, entry_id", (document_id,)),
+        # Only bullets this document has cut; everything else prints.
+        "hidden_bullets": [r["bullet_id"] for r in
+                           rows(con, "SELECT bullet_id FROM doc_bullet "
+                                     "WHERE document_id = ? AND include = 0", (document_id,))],
+        "skill_ids": [r["skill_id"] for r in
+                      rows(con, "SELECT skill_id FROM doc_skill WHERE document_id = ? "
+                                "ORDER BY skill_id", (document_id,))],
+    }
 
 
 # --------------------------------------------------------------- API: write --
 
+def create_document(con, body: dict) -> dict:
+    """A new document starts blank: no headings, nothing selected."""
+    title = clean(body.get("title"))
+    if not title:
+        raise Bad("a document needs a title")
+    slug = slugify(clean(body.get("slug")) or title)
+    if con.execute("SELECT 1 FROM document WHERE slug = ?", (slug,)).fetchone():
+        raise Bad(f"a document with the slug {slug!r} already exists")
+
+    with con:
+        cur = con.execute(
+            "INSERT INTO document (slug, title, density, paper, notes) VALUES (?,?,?,?,?)",
+            (slug, title, as_number("density", body.get("density")) or 1.0,
+             clean(body.get("paper")) or "us-letter", clean(body.get("notes"))))
+        document_id = cur.lastrowid
+
+        # Copying an existing arrangement beats retyping a dozen headings.
+        source = as_number("section_id", body.get("copy_from"))
+        if source:
+            copy_document(con, source, document_id)
+    return {"id": document_id, "slug": slug}
+
+
+def copy_document(con, source_id: int, target_id: int) -> None:
+    section_map = {}
+    for s in con.execute("SELECT * FROM section WHERE document_id = ? ORDER BY sort_order, id",
+                         (source_id,)):
+        section_map[s["id"]] = con.execute(
+            "INSERT INTO section (document_id, heading, style, sort_order, include) "
+            "VALUES (?,?,?,?,?)",
+            (target_id, s["heading"], s["style"], s["sort_order"], s["include"])).lastrowid
+
+    for p in con.execute("SELECT * FROM doc_entry WHERE document_id = ?", (source_id,)):
+        con.execute("INSERT INTO doc_entry (document_id, entry_id, section_id, sort_order, "
+                    "include) VALUES (?,?,?,?,?)",
+                    (target_id, p["entry_id"], section_map[p["section_id"]],
+                     p["sort_order"], p["include"]))
+
+    con.execute("INSERT INTO doc_bullet (document_id, bullet_id, include) "
+                "SELECT ?, bullet_id, include FROM doc_bullet WHERE document_id = ?",
+                (target_id, source_id))
+    con.execute("INSERT INTO doc_skill (document_id, skill_id) "
+                "SELECT ?, skill_id FROM doc_skill WHERE document_id = ?",
+                (target_id, source_id))
+
+
+def create_section(con, document_id: int, body: dict) -> dict:
+    heading = clean(body.get("heading"))
+    style = clean(body.get("style")) or "entries"
+    if not heading:
+        raise Bad("a section needs a heading")
+    if style not in STYLES:
+        raise Bad(f"style must be one of {', '.join(STYLES)}")
+    order = con.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM section "
+                        "WHERE document_id = ?", (document_id,)).fetchone()[0]
+    try:
+        with con:
+            cur = con.execute("INSERT INTO section (document_id, heading, style, sort_order) "
+                              "VALUES (?,?,?,?)", (document_id, heading, style, order))
+    except sqlite3.IntegrityError:
+        raise Bad(f"this document already has a section headed {heading!r}")
+    return {"id": cur.lastrowid}
+
+
+def place_entry(con, document_id: int, body: dict) -> dict:
+    """Put a library entry under a heading in this document, or move it."""
+    entry_id = as_number("section_id", body.get("entry_id"))
+    section_id = as_number("section_id", body.get("section_id"))
+    if not entry_id or not section_id:
+        raise Bad("placing an entry needs both entry_id and section_id")
+
+    owner = con.execute("SELECT document_id, style FROM section WHERE id = ?",
+                        (section_id,)).fetchone()
+    if owner is None or owner["document_id"] != document_id:
+        raise Bad("that heading belongs to a different document")
+    if owner["style"] != "entries":
+        raise Bad("only an 'entries' section can hold experience")
+
+    order = con.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM doc_entry "
+                        "WHERE section_id = ?", (section_id,)).fetchone()[0]
+    with con:
+        con.execute(
+            "INSERT INTO doc_entry (document_id, entry_id, section_id, sort_order) "
+            "VALUES (?,?,?,?) "
+            "ON CONFLICT (document_id, entry_id) DO UPDATE SET section_id = excluded.section_id",
+            (document_id, entry_id, section_id, order))
+    return {"entry_id": entry_id, "section_id": section_id}
+
+
+def patch_placement(con, document_id: int, entry_id: int, body: dict) -> dict:
+    fields = {k: as_number(k, v) for k, v in body.items()
+              if k in ("section_id", "sort_order", "include")}
+    if not fields:
+        raise Bad("nothing to update")
+    assignments = ", ".join(f"{f} = ?" for f in fields)
+    with con:
+        cur = con.execute(
+            f"UPDATE doc_entry SET {assignments} WHERE document_id = ? AND entry_id = ?",
+            [*fields.values(), document_id, entry_id])
+    if not cur.rowcount:
+        raise Bad("that entry is not in this document")
+    return {"updated": list(fields)}
+
+
+def set_bullet(con, document_id: int, bullet_id: int, body: dict) -> dict:
+    """Cut a bullet from this document, or put it back. Absent row = prints."""
+    if body.get("include"):
+        with con:
+            con.execute("DELETE FROM doc_bullet WHERE document_id = ? AND bullet_id = ?",
+                        (document_id, bullet_id))
+    else:
+        with con:
+            con.execute("INSERT INTO doc_bullet (document_id, bullet_id, include) "
+                        "VALUES (?,?,0) ON CONFLICT (document_id, bullet_id) "
+                        "DO UPDATE SET include = 0", (document_id, bullet_id))
+    return {"bullet_id": bullet_id, "include": bool(body.get("include"))}
+
+
+def set_skill(con, document_id: int, skill_id: int, body: dict) -> dict:
+    with con:
+        if body.get("include"):
+            con.execute("INSERT OR IGNORE INTO doc_skill (document_id, skill_id) VALUES (?,?)",
+                        (document_id, skill_id))
+        else:
+            con.execute("DELETE FROM doc_skill WHERE document_id = ? AND skill_id = ?",
+                        (document_id, skill_id))
+    return {"skill_id": skill_id, "include": bool(body.get("include"))}
+
+
 def create_entry(con, body: dict) -> dict:
+    """Add experience to the library, optionally filing it straight into a
+    document so you don't have to go and find it again."""
     kind = clean(body.get("kind"))
     if kind not in KINDS:
         raise Bad(f"kind must be one of {', '.join(KINDS)}")
@@ -149,30 +324,18 @@ def create_entry(con, body: dict) -> dict:
         entry_id = cur.lastrowid
 
         for i, text in enumerate(split_bullets(body.get("bullets")), start=1):
-            con.execute("INSERT INTO bullet (entry_id, text, sort_order) VALUES (?, ?, ?)",
+            con.execute("INSERT INTO bullet (entry_id, text, sort_order) VALUES (?,?,?)",
                         (entry_id, text, i))
 
         for skill_id in body.get("skill_ids") or []:
-            con.execute("INSERT OR IGNORE INTO entry_skill (entry_id, skill_id) VALUES (?, ?)",
+            con.execute("INSERT OR IGNORE INTO entry_skill (entry_id, skill_id) VALUES (?,?)",
                         (entry_id, int(skill_id)))
 
-        variant_id, section_id = body.get("variant_id"), body.get("section_id")
-        if variant_id and section_id:
-            place_entry(con, entry_id, int(variant_id), int(section_id))
-
+    document_id = as_number("section_id", body.get("document_id"))
+    section_id = as_number("section_id", body.get("section_id"))
+    if document_id and section_id:
+        place_entry(con, document_id, {"entry_id": entry_id, "section_id": section_id})
     return {"id": entry_id}
-
-
-def place_entry(con, entry_id: int, variant_id: int, section_id: int) -> None:
-    """Put an entry into a variant under a heading. Without this it renders nowhere."""
-    owner = con.execute("SELECT variant_id FROM section WHERE id = ?", (section_id,)).fetchone()
-    if owner is None or owner["variant_id"] != variant_id:
-        raise Bad("that section belongs to a different variant")
-    con.execute(
-        "INSERT OR REPLACE INTO variant_entry (variant_id, entry_id, section_id, sort_order) "
-        "VALUES (?, ?, ?, ?)",
-        (variant_id, entry_id, section_id, next_order(con, "variant_entry", "section_id", section_id)),
-    )
 
 
 def split_bullets(raw) -> list[str]:
@@ -180,30 +343,25 @@ def split_bullets(raw) -> list[str]:
     if not raw:
         return []
     lines = raw if isinstance(raw, list) else str(raw).splitlines()
-    out = []
-    for line in lines:
-        text = str(line).strip().lstrip("-•*").strip()
-        if text:
-            out.append(text)
-    return out
+    return [t for t in (str(l).strip().lstrip("-•*").strip() for l in lines) if t]
 
 
 def create_skill(con, body: dict) -> dict:
-    name = clean(body.get("name"))
-    category = clean(body.get("category"))
+    name, category = clean(body.get("name")), clean(body.get("category"))
     if not name:
         raise Bad("a skill needs a name")
     if not category:
         raise Bad("a skill needs a category — it is the bold label in the Skills section")
 
     order = body.get("sort_order")
-    order = int(order) if str(order or "").strip() else next_order(con, "skill", "category", category)
+    if not str(order or "").strip():
+        order = con.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM skill "
+                            "WHERE category = ?", (category,)).fetchone()[0]
     try:
         with con:
-            cur = con.execute(
-                "INSERT INTO skill (name, category, detail, sort_order) VALUES (?, ?, ?, ?)",
-                (name, category, clean(body.get("detail")), order),
-            )
+            cur = con.execute("INSERT INTO skill (name, category, detail, sort_order) "
+                              "VALUES (?,?,?,?)",
+                              (name, category, clean(body.get("detail")), int(order)))
     except sqlite3.IntegrityError:
         raise Bad(f"a skill named {name!r} already exists")
     return {"id": cur.lastrowid}
@@ -213,17 +371,50 @@ def add_bullet(con, entry_id: int, body: dict) -> dict:
     text = clean(body.get("text"))
     if not text:
         raise Bad("a bullet needs text")
+    order = con.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM bullet "
+                        "WHERE entry_id = ?", (entry_id,)).fetchone()[0]
     with con:
-        cur = con.execute("INSERT INTO bullet (entry_id, text, sort_order) VALUES (?, ?, ?)",
-                          (entry_id, text, next_order(con, "bullet", "entry_id", entry_id)))
+        cur = con.execute("INSERT INTO bullet (entry_id, text, sort_order) VALUES (?,?,?)",
+                          (entry_id, text, order))
     return {"id": cur.lastrowid}
+
+
+def patch(con, table: str, row_id: int, body: dict) -> dict:
+    """Update whichever whitelisted columns the client sent. Absent keys are
+    left alone, so a checkbox toggle sends one field and touches one column."""
+    fields = {k: v for k, v in body.items() if k in PATCHABLE[table]}
+    if not fields:
+        raise Bad("nothing to update")
+
+    values = {f: (as_number(f, v) if f in NUMERIC else clean(v)) for f, v in fields.items()}
+
+    if table == "entry" and "kind" in values and values["kind"] not in KINDS:
+        raise Bad(f"kind must be one of {', '.join(KINDS)}")
+    if table == "section" and "style" in values and values["style"] not in STYLES:
+        raise Bad(f"style must be one of {', '.join(STYLES)}")
+    if "text" in values and not values["text"]:
+        raise Bad("a bullet cannot be emptied — delete it instead")
+    for required in ("name", "heading", "title", "full_name"):
+        if required in values and not values[required]:
+            raise Bad(f"{required.replace('_', ' ')} cannot be empty")
+
+    assignments = ", ".join(f"{f} = ?" for f in values)
+    try:
+        with con:
+            cur = con.execute(f"UPDATE {table} SET {assignments} WHERE id = ?",
+                              [*values.values(), row_id])
+    except sqlite3.IntegrityError as e:
+        raise Bad(str(e))
+    if not cur.rowcount:
+        raise Bad(f"no {table} with id {row_id}")
+    return {"updated": list(values)}
 
 
 def link_skills(con, entry_id: int, body: dict) -> dict:
     ids = [int(i) for i in (body.get("skill_ids") or [])]
     with con:
         for skill_id in ids:
-            con.execute("INSERT OR IGNORE INTO entry_skill (entry_id, skill_id) VALUES (?, ?)",
+            con.execute("INSERT OR IGNORE INTO entry_skill (entry_id, skill_id) VALUES (?,?)",
                         (entry_id, skill_id))
     return {"linked": len(ids)}
 
@@ -234,45 +425,135 @@ def delete_row(con, table: str, row_id: int) -> dict:
     return {"deleted": cur.rowcount}
 
 
+def reorder(con, table: str, body: dict) -> dict:
+    """Renumber sort_order from an explicit list of ids, 1..n."""
+    ids = [int(i) for i in (body.get("ids") or [])]
+    with con:
+        for position, row_id in enumerate(ids, start=1):
+            con.execute(f"UPDATE {table} SET sort_order = ? WHERE id = ?", (position, row_id))
+    return {"reordered": len(ids)}
+
+
+# ------------------------------------------------------------------ generate --
+
+def generate(con, body: dict) -> dict:
+    document_id = as_number("section_id", body.get("document_id"))
+    if not document_id:
+        raise Bad("which document? none was given")
+    try:
+        source = cv_typst.render(con, document_id)
+    except LookupError as e:
+        raise Bad(str(e))
+
+    GENERATED.write_text(source)
+    result = {"typst": source, "path": GENERATED.name, "compiled": False,
+              "download": "/download/typ", "filename": download_name(con, document_id, "typ")}
+
+    if body.get("compile"):
+        if not shutil.which("typst"):
+            result["error"] = "typst is not on PATH — the .typ file was still written"
+            return result
+        run = subprocess.run(["typst", "compile", GENERATED.name],
+                             cwd=ROOT, capture_output=True, text=True, timeout=120)
+        result["compiled"] = run.returncode == 0
+        if run.returncode:
+            result["error"] = (run.stderr or run.stdout).strip()[:2000]
+        else:
+            result["pdf"] = GENERATED.with_suffix(".pdf").name
+            result["download"] = "/download/pdf"
+            result["filename"] = download_name(con, document_id, "pdf")
+    return result
+
+
+def reveal(body: dict) -> dict:
+    """Show the generated file in Finder — the copy in the project folder."""
+    target = GENERATED.with_suffix(".pdf") if body.get("kind") == "pdf" else GENERATED
+    if not target.is_file():
+        raise Bad("nothing generated yet — press Generate first")
+    if sys.platform != "darwin":
+        raise Bad("Reveal in Finder only works on macOS")
+    subprocess.run(["open", "-R", str(target)], timeout=10)
+    return {"revealed": target.name, "path": str(target)}
+
+
+def download_name(con, document_id, suffix: str) -> str:
+    """What the browser saves it as: "Moon Younes - Full CV.pdf".
+
+    Kept to characters every filesystem accepts, since this becomes a real file
+    in someone's Downloads folder.
+    """
+    person = (get_profile(con).get("full_name") or "").strip()
+    row = con.execute("SELECT title FROM document WHERE id = ?", (document_id,)).fetchone()
+    label = " - ".join(filter(None, [person, row["title"] if row else "CV"]))
+    safe = "".join(c for c in label if c.isalnum() or c in " -_").strip() or "cv"
+    return f"{safe}.{suffix}"
+
+
 # ------------------------------------------------------------------ routing --
 
 def route(con, method: str, path: str, body: dict):
-    parts = [p for p in path.strip("/").split("/") if p]  # e.g. ['api','entries','3']
+    tail = [p for p in path.strip("/").split("/") if p][1:]   # after 'api'
+    n = len(tail)
 
     if method == "GET":
-        if parts == ["api", "meta"]:
+        if tail == ["meta"]:
             return get_meta(con)
-        if parts == ["api", "entries"]:
-            return get_entries(con)
-        if parts == ["api", "skills"]:
-            return get_skills(con)
+        if tail == ["library"]:
+            return get_library(con)
+        if tail == ["documents"]:
+            return get_documents(con)
+        if tail == ["profile"]:
+            return get_profile(con)
+        if n == 2 and tail[0] == "documents":
+            return get_document(con, int(tail[1]))
 
     if method == "POST":
-        if parts == ["api", "entries"]:
+        if tail == ["entries"]:
             return create_entry(con, body)
-        if parts == ["api", "skills"]:
+        if tail == ["skills"]:
             return create_skill(con, body)
-        if len(parts) == 4 and parts[:2] == ["api", "entries"] and parts[3] == "bullets":
-            return add_bullet(con, int(parts[2]), body)
-        if len(parts) == 4 and parts[:2] == ["api", "entries"] and parts[3] == "skills":
-            return link_skills(con, int(parts[2]), body)
-        if len(parts) == 4 and parts[:2] == ["api", "entries"] and parts[3] == "place":
-            with con:
-                place_entry(con, int(parts[2]), int(body["variant_id"]), int(body["section_id"]))
-            return {"ok": True}
+        if tail == ["documents"]:
+            return create_document(con, body)
+        if tail == ["generate"]:
+            return generate(con, body)
+        if tail == ["reveal"]:
+            return reveal(body)
+        if n == 2 and tail[1] == "reorder" and tail[0] in ("sections", "entries"):
+            return reorder(con, TABLE_OF[tail[0]], body)
+        if n == 3 and tail[0] == "entries" and tail[2] == "bullets":
+            return add_bullet(con, int(tail[1]), body)
+        if n == 3 and tail[0] == "entries" and tail[2] == "skills":
+            return link_skills(con, int(tail[1]), body)
+        if n == 3 and tail[0] == "documents" and tail[2] == "sections":
+            return create_section(con, int(tail[1]), body)
+        if n == 3 and tail[0] == "documents" and tail[2] == "place":
+            return place_entry(con, int(tail[1]), body)
+
+    if method in ("PUT", "PATCH"):
+        if tail == ["profile"] or (n == 2 and tail[0] == "profile"):
+            return patch(con, "profile", 1, body)   # a singleton; the id is ignored
+        if n == 4 and tail[0] == "documents" and tail[2] == "place":
+            return patch_placement(con, int(tail[1]), int(tail[3]), body)
+        if n == 4 and tail[0] == "documents" and tail[2] == "bullets":
+            return set_bullet(con, int(tail[1]), int(tail[3]), body)
+        if n == 4 and tail[0] == "documents" and tail[2] == "skills":
+            return set_skill(con, int(tail[1]), int(tail[3]), body)
+        if n == 2 and tail[0] in TABLE_OF:
+            return patch(con, TABLE_OF[tail[0]], int(tail[1]), body)
 
     if method == "DELETE":
-        if len(parts) == 3 and parts[:2] == ["api", "entries"]:
-            return delete_row(con, "entry", int(parts[2]))
-        if len(parts) == 3 and parts[:2] == ["api", "skills"]:
-            return delete_row(con, "skill", int(parts[2]))
-        if len(parts) == 3 and parts[:2] == ["api", "bullets"]:
-            return delete_row(con, "bullet", int(parts[2]))
-        if len(parts) == 5 and parts[:2] == ["api", "entries"] and parts[3] == "skills":
+        if n == 4 and tail[0] == "documents" and tail[2] == "place":
+            with con:
+                con.execute("DELETE FROM doc_entry WHERE document_id = ? AND entry_id = ?",
+                            (int(tail[1]), int(tail[3])))
+            return {"ok": True}
+        if n == 4 and tail[0] == "entries" and tail[2] == "skills":
             with con:
                 con.execute("DELETE FROM entry_skill WHERE entry_id = ? AND skill_id = ?",
-                            (int(parts[2]), int(parts[4])))
+                            (int(tail[1]), int(tail[3])))
             return {"ok": True}
+        if n == 2 and tail[0] in TABLE_OF:
+            return delete_row(con, TABLE_OF[tail[0]], int(tail[1]))
 
     raise Bad(f"no route for {method} {path}")
 
@@ -285,14 +566,22 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path.startswith("/api/"):
             self.api("GET", path, {})
+        elif path.startswith("/download/"):
+            self.download(path.rsplit("/", 1)[-1])
         else:
             self.static(path)
 
     def do_POST(self):
         self.api("POST", urlparse(self.path).path, self.read_json())
 
+    def do_PATCH(self):
+        self.api("PATCH", urlparse(self.path).path, self.read_json())
+
+    def do_PUT(self):
+        self.api("PUT", urlparse(self.path).path, self.read_json())
+
     def do_DELETE(self):
-        self.api("DELETE", urlparse(self.path).path, {})
+        self.api("DELETE", urlparse(self.path).path, self.read_json())
 
     # -- helpers --
 
@@ -314,12 +603,45 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": f"bad request: {e}"})
         except sqlite3.Error as e:
             self.send_json(500, {"error": f"database: {e}"})
+        except subprocess.TimeoutExpired:
+            self.send_json(500, {"error": "typst compile timed out"})
 
     def send_json(self, status, payload):
         data = json.dumps(payload, ensure_ascii=False).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def download(self, kind):
+        """Hand the generated file to the browser as a save, not a page.
+
+        Only the two generated files are reachable — `kind` indexes a fixed
+        table rather than becoming part of a path.
+        """
+        targets = {"pdf": (GENERATED.with_suffix(".pdf"), "application/pdf"),
+                   "typ": (GENERATED, "text/plain; charset=utf-8")}
+        if kind not in targets:
+            self.send_error(404)
+            return
+        target, mime = targets[kind]
+        if not target.is_file():
+            # ASCII only: this goes in the HTTP status line, which is latin-1.
+            self.send_error(404, "nothing generated yet - press Generate first")
+            return
+
+        # The page passes ?name= because only it knows which document was just
+        # generated. Sanitised here anyway: this lands in someone's Downloads.
+        wanted = parse_qs(urlparse(self.path).query).get("name", [""])[0]
+        filename = "".join(c for c in wanted if c.isalnum() or c in " -_.") or f"cv.{kind}"
+
+        data = target.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
 
