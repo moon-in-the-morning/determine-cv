@@ -12,6 +12,7 @@ const db = {
   library: { entries: [], skills: [], references: [] },
   doc: null,
   versions: [],
+  imports: null,
 };
 
 /* The six ways a heading can render, and what each one reads from. Kept in one
@@ -558,6 +559,69 @@ function renderSkills() {
   }
 }
 
+/* ----------------------------------------------------------------- profile */
+
+function renderProfile() {
+  const p = db.meta.profile ?? {};
+
+  // A database straight from starter.sql has the placeholder name and no
+  // contacts. Say so once, on the tab you land on, rather than letting someone
+  // generate a CV headed "Your Name".
+  $('#first-run').hidden =
+    !(!p.full_name || p.full_name === 'Your Name' || !db.meta.contacts.length);
+
+  const fields = document.createElement('dl');
+  fields.className = 'fields';
+  for (const [label, field, opts] of [
+    ['Name', 'full_name', { placeholder: 'Your name — click to set it' }],
+    ['Legal name', 'legal_name', { placeholder: '— (only if it differs)' }],
+    ['Pronouns', 'pronouns', { placeholder: '—' }],
+    ['Profile paragraph', 'summary', { placeholder: '—', multiline: true }],
+  ]) {
+    const dt = document.createElement('dt');
+    dt.textContent = label;
+    const dd = document.createElement('dd');
+    dd.append(editable('/api/profile', field, p[field], opts));
+    fields.append(dt, dd);
+  }
+  $('#profile-fields').replaceChildren(fields);
+
+  const list = $('#contact-list');
+  list.replaceChildren();
+  if (!db.meta.contacts.length) {
+    list.innerHTML = '<p class="empty">No contact details yet — add one below.</p>';
+    return;
+  }
+  const ul = document.createElement('ul');
+  ul.className = 'sends';                     // same one-line-each treatment
+  for (const c of db.meta.contacts) {
+    const li = document.createElement('li');
+
+    const kind = document.createElement('select');
+    kind.className = 'style-select';
+    kind.title = 'How this one prints';
+    db.meta.contact_kinds.forEach(k => kind.append(option(k, k)));
+    kind.value = c.kind;
+    kind.onchange = () => write('PATCH', `/api/contacts/${c.id}`, { kind: kind.value });
+    li.append(kind);
+
+    const value = document.createElement('span');
+    value.className = 'title';
+    value.append(editable(`/api/contacts/${c.id}`, 'value', c.value));
+    li.append(value);
+
+    const display = document.createElement('small');
+    display.append(editable(`/api/contacts/${c.id}`, 'display', c.display,
+                            { placeholder: '+ display as' }));
+    li.append(display);
+
+    li.append(deleteButton(`Remove ${c.value} from your contact line?`,
+                           `/api/contacts/${c.id}`));
+    ul.append(li);
+  }
+  list.append(ul);
+}
+
 /* -------------------------------------------------------------- references */
 
 function renderReferences() {
@@ -792,6 +856,16 @@ $('#skill-form').onsubmit = async event => {
   } catch (err) { flash(err.message, 'error'); }
 };
 
+$('#contact-form').onsubmit = async event => {
+  event.preventDefault();
+  const body = Object.fromEntries(new FormData(event.target));
+  if (!body.value.trim()) return;
+  if (await write('POST', '/api/contacts', body)) {
+    event.target.reset();
+    flash(`Added ${body.value} to your contact line.`);
+  }
+};
+
 $('#reference-form').onsubmit = async event => {
   event.preventDefault();
   const body = Object.fromEntries(new FormData(event.target));
@@ -934,12 +1008,299 @@ $('#reveal').onclick = async () => {
   } catch (err) { flash(err.message, 'error'); }
 };
 
-$$('.tab').forEach(tab => {
-  tab.onclick = () => {
-    $$('.tab').forEach(t => t.setAttribute('aria-selected', String(t === tab)));
-    $$('.panel').forEach(p => { p.hidden = p.id !== tab.dataset.panel; });
+$$('.tab').forEach(tab => { tab.onclick = () => show(tab.dataset.panel); });
+
+
+/* ==================================================================== import ==
+
+   Upload, then a confirmation per part of the library. The wizard never writes
+   to the library itself: every decision goes to /api/extractions, and the
+   server promotes only what was accepted. Edits made here are staged on the
+   proposal, so backing out of a step loses nothing.                          */
+
+const wiz = { source: null, steps: [], at: 0, edits: {}, dropped: new Set() };
+
+const FIELDS = {
+  profile:   [['full_name', 'Name'], ['legal_name', 'Legal name'], ['pronouns', 'Pronouns']],
+  contact:   [['display', 'Shown as'], ['value', 'Value'], ['kind', 'Kind']],
+  entry:     [['org', 'Organisation'], ['title', 'Title / role'],
+              ['date_display', 'Dates'], ['location', 'Location'], ['note', 'Note']],
+  skill:     [['name', 'Name'], ['category', 'Category'], ['detail', 'Detail']],
+  reference: [['name', 'Name'], ['title', 'Title'], ['org', 'Organisation'],
+              ['email', 'Email'], ['phone', 'Phone']],
+};
+
+async function uploadFile(file) {
+  if (!file) return;
+  flash(`Reading ${file.name}…`);
+  const data = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = () => reject(new Error('could not read that file'));
+    reader.readAsDataURL(file);
+  });
+
+  try {
+    const out = await api('POST', '/api/imports', { filename: file.name, data });
+    const source = out.sources[0];
+    flash(`Read ${source.filename} — ${Math.round((source.coverage || 0) * 100)}% of it accounted for.`);
+    await refresh();
+    await openWizard(source.id);
+  } catch (err) { flash(err.message, 'error'); }
+}
+
+async function openWizard(sourceId) {
+  const review = await api('GET', `/api/imports/${sourceId}`);
+  wiz.source = review.source;
+  wiz.steps = review.steps.filter(step => step.proposals.length);
+  wiz.bullets = review.bullets || {};
+  wiz.at = 0;
+  wiz.edits = {};
+  wiz.dropped = new Set();
+
+  $('#onboarding').hidden = true;
+  show('panel-import');
+  if (!wiz.steps.length) {
+    $('#wizard').hidden = true;
+    flash('Nothing left to confirm in that file.');
+    return;
+  }
+  $('#wizard').hidden = false;
+  renderWizard();
+}
+
+function renderWizard() {
+  const step = wiz.steps[wiz.at];
+  if (!step) return;
+
+  $('#wizard-title').textContent = step.title;
+  $('#wizard-sub').textContent =
+    `${wiz.source.filename} · step ${wiz.at + 1} of ${wiz.steps.length} · ` +
+    `${step.proposals.length} found. Edit anything that is wrong, untick anything you don't want.`;
+
+  const rail = $('#wizard-steps');
+  rail.replaceChildren();
+  wiz.steps.forEach((s, i) => {
+    const li = document.createElement('li');
+    li.className = i === wiz.at ? 'here' : (i < wiz.at ? 'done' : '');
+    li.textContent = s.title;
+    li.onclick = () => { wiz.at = i; renderWizard(); };
+    rail.append(li);
+  });
+
+  const body = $('#wizard-body');
+  body.replaceChildren();
+  step.proposals.forEach(p => body.append(proposalCard(p, step)));
+  body.append(addAnotherForm(step));
+
+  $('#wizard-back').disabled = wiz.at === 0;
+  $('#wizard-next').textContent =
+    wiz.at === wiz.steps.length - 1 ? 'Confirm and finish' : 'Confirm and continue';
+}
+
+function proposalCard(p, step) {
+  const card = document.createElement('article');
+  card.className = 'card proposal';
+  const staged = () => ({ ...p.payload, ...(wiz.edits[p.id] || {}) });
+
+  const head = document.createElement('header');
+  head.append(checkbox(!wiz.dropped.has(p.id), 'Add this to your library', on => {
+    on ? wiz.dropped.delete(p.id) : wiz.dropped.add(p.id);
+    card.classList.toggle('off', !on);
+  }));
+  const h3 = document.createElement('h3');
+  h3.textContent = step.title.replace(/s$/, '');
+  head.append(h3);
+  if (p.confidence < 0.8) {
+    const flag = document.createElement('span');
+    flag.className = 'tag warn';
+    flag.textContent = p.confidence < 0.6 ? 'check this one' : 'unsure';
+    flag.title = `rule: ${p.rule}`;
+    head.append(flag);
+  }
+  card.append(head);
+
+  const grid = document.createElement('div');
+  grid.className = 'proposal-fields';
+  for (const [field, label] of FIELDS[p.target] || [['text', 'Text']]) {
+    const wrap = document.createElement('label');
+    wrap.className = 'field';
+    wrap.innerHTML = `<span>${esc(label)}</span>`;
+    const input = document.createElement('input');
+    input.value = staged()[field] ?? '';
+    input.placeholder = '—';
+    input.oninput = () => {
+      wiz.edits[p.id] = { ...(wiz.edits[p.id] || {}), [field]: input.value.trim() };
+    };
+    wrap.append(input);
+    grid.append(wrap);
+  }
+  card.append(grid);
+
+  const kids = (wiz.bullets || {})[p.id] || [];
+  if (kids.length) {
+    const ul = document.createElement('ul');
+    ul.className = 'bullets';
+    kids.forEach(b => {
+      const li = document.createElement('li');
+      li.textContent = b.payload.text || '';
+      ul.append(li);
+    });
+    card.append(ul);
+  }
+
+  if (p.quote) {
+    const src = document.createElement('details');
+    src.className = 'quote';
+    src.innerHTML = `<summary>from your file</summary><pre>${esc(p.quote)}</pre>`;
+    card.append(src);
+  }
+  return card;
+}
+
+/** Anything the parser missed, typed in by hand — same step, same shape. */
+function addAnotherForm(step) {
+  const target = step.targets[step.targets.length - 1];
+  const form = document.createElement('form');
+  form.className = 'card add-another';
+  const fields = FIELDS[target] || [['text', 'Text']];
+  form.innerHTML = `<h3>Add another ${esc(step.title.replace(/s$/, '').toLowerCase())}</h3>`;
+  const grid = document.createElement('div');
+  grid.className = 'proposal-fields';
+  fields.forEach(([field, label]) => {
+    const wrap = document.createElement('label');
+    wrap.className = 'field';
+    wrap.innerHTML = `<span>${esc(label)}</span>`;
+    const input = document.createElement('input');
+    input.name = field;
+    wrap.append(input);
+    grid.append(wrap);
+  });
+  form.append(grid);
+  const add = document.createElement('button');
+  add.type = 'submit';
+  add.textContent = 'Add';
+  form.append(add);
+
+  form.onsubmit = async event => {
+    event.preventDefault();
+    const body = Object.fromEntries(
+      [...new FormData(form)].filter(([, v]) => String(v).trim()));
+    if (!Object.keys(body).length) return;
+    const routes = { entry: '/api/entries', skill: '/api/skills',
+                     reference: '/api/references', contact: '/api/contacts' };
+    if (target === 'profile') {
+      if (await write('PATCH', '/api/profile', body)) flash('Saved.');
+      form.reset();
+      return;
+    }
+    if (target === 'entry') body.kind = step.kinds?.[0] || 'position';
+    if (target === 'skill') body.category = body.category || step.title;
+    try {
+      await api('POST', routes[target], body);
+      form.reset();
+      flash('Added.');
+      await refresh();
+    } catch (err) { flash(err.message, 'error'); }
   };
-});
+  return form;
+}
+
+async function commitStep({ accept = true } = {}) {
+  const step = wiz.steps[wiz.at];
+  if (!step) return;
+
+  if (accept) {
+    const keep = step.proposals.filter(p => !wiz.dropped.has(p.id));
+    const drop = step.proposals.filter(p => wiz.dropped.has(p.id));
+    const edits = {};
+    keep.forEach(p => { if (wiz.edits[p.id]) edits[String(p.id)] = wiz.edits[p.id]; });
+
+    try {
+      if (drop.length) {
+        await api('POST', `/api/imports/${wiz.source.id}/decide`,
+                  { ids: drop.map(p => p.id), action: 'reject' });
+      }
+      if (keep.length) {
+        const out = await api('POST', `/api/imports/${wiz.source.id}/decide`,
+                              { ids: keep.map(p => p.id), action: 'accept', edits });
+        if (out.failed) flash(`${out.done} added, ${out.failed} could not be`, 'error');
+      }
+    } catch (err) { flash(err.message, 'error'); return; }
+  }
+
+  wiz.at += 1;
+  await refresh();
+  if (wiz.at >= wiz.steps.length) {
+    $('#wizard').hidden = true;
+    flash('Import finished. Create a document when you are ready.');
+    show('panel-documents');
+    return;
+  }
+  renderWizard();
+}
+
+function renderImports() {
+  const list = $('#import-list');
+  list.replaceChildren();
+  for (const s of db.imports?.sources ?? []) {
+    const card = document.createElement('article');
+    card.className = 'card';
+    const pending = s.counts?.pending || 0;
+    card.innerHTML =
+      `<h3>${esc(s.filename)}</h3>` +
+      `<p class="meta">${esc(s.kind)} · ${Math.round((s.coverage || 0) * 100)}% accounted for · ` +
+      `${pending} awaiting you · ${s.counts?.accepted || 0} added · ` +
+      `${s.unparsed} unplaced passage${s.unparsed === 1 ? '' : 's'}</p>`;
+    if (pending) card.append(button('Review', 'small', () => openWizard(s.id)));
+    card.append(deleteButton(
+      `Discard the import of “${s.filename}”? Anything already added stays in your library.`,
+      `/api/imports/${s.id}`));
+    list.append(card);
+  }
+  if (!list.children.length) list.innerHTML = '<p class="empty">No imports yet.</p>';
+}
+
+/* --------------------------------------------------------------- wiring ---- */
+
+function show(panelId) {
+  $$('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.panel === panelId)));
+  $$('.panel').forEach(p => { p.hidden = p.id !== panelId; });
+}
+
+function wireDropzone(zone, input) {
+  if (!zone || !input) return;
+  zone.onclick = () => input.click();
+  input.onchange = () => uploadFile(input.files[0]);
+  ['dragenter', 'dragover'].forEach(e => zone.addEventListener(e, ev => {
+    ev.preventDefault(); zone.classList.add('over');
+  }));
+  ['dragleave', 'drop'].forEach(e => zone.addEventListener(e, ev => {
+    ev.preventDefault(); zone.classList.remove('over');
+  }));
+  zone.addEventListener('drop', ev => uploadFile(ev.dataTransfer?.files?.[0]));
+}
+
+wireDropzone($('#dropzone'), $('#onboard-file'));
+wireDropzone($('#dropzone-2'), $('#import-file'));
+
+$('#skip-import').onclick = () => {
+  localStorage.setItem('cv_db.skipped_import', '1');
+  $('#onboarding').hidden = true;
+  show('panel-documents');
+};
+
+$('#wizard-close').onclick = () => { $('#wizard').hidden = true; };
+$('#wizard-back').onclick = () => { if (wiz.at) { wiz.at -= 1; renderWizard(); } };
+$('#wizard-skip').onclick = () => commitStep({ accept: false });
+$('#wizard-next').onclick = () => commitStep({ accept: true });
+
+$('#new-document').onclick = () => {
+  show('panel-documents');
+  $('#d-title')?.focus();
+  $('#d-title')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+};
+
 
 /* ------------------------------------------------------------------ reload -- */
 
@@ -967,7 +1328,11 @@ async function refresh() {
     localStorage.removeItem(ACTIVE_KEY);
   }
 
+  db.imports = await api('GET', '/api/imports');
+
   renderChrome();
+  renderImports();
+  renderProfile();
   renderTree();
   renderLibrary();
   renderDocuments();
@@ -975,6 +1340,12 @@ async function refresh() {
   renderReferences();
   renderVersions();
   $$('.entry-row').forEach(d => { if (open.has(d.dataset.id)) d.open = true; });
+
+  // A library with nothing in it and no import under way means a new user.
+  const bare = !db.library.entries.length && !db.library.skills.length
+               && !db.meta.documents.length;
+  const skipped = localStorage.getItem('cv_db.skipped_import');
+  $('#onboarding').hidden = !(bare && !skipped && $('#wizard').hidden);
 }
 
 refresh().catch(err => flash(`Could not reach the server: ${err.message}`, 'error'));

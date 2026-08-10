@@ -243,6 +243,69 @@ CREATE TABLE send (
 
 CREATE INDEX send_version ON send(version_id, sent_on, id);
 
+-- ====================================================== THE STAGING AREA =====
+--  Where an uploaded document lands, and what the parser made of it.
+--
+--  THE RULE: extraction PROPOSES, a human PROMOTES. Nothing in the library
+--  above was ever guessed at, and that is the property the whole document
+--  model rests on — so a parser writes here, never there. `extraction.entry_id`
+--  is set on acceptance and is the only thread back.
+--
+--  `char_start`/`char_end` index `source.text`, so every proposal can show the
+--  reviewer the exact words it came from. That is not decoration: `unparsed`
+--  holds every span NO proposal claimed, and between them the two tables
+--  account for every character of the file. A parser obliged to place all of
+--  its input can only fail visibly, which is the whole reason to prefer rules
+--  here — text quietly ignored is indistinguishable from text that was absent.
+
+CREATE TABLE source (
+  id          INTEGER PRIMARY KEY,
+  filename    TEXT NOT NULL,
+  kind        TEXT NOT NULL,          -- typst · latex · docx · pdf · markdown · html · text
+  sha256      TEXT NOT NULL,          -- of the original bytes, not of `text`
+  text        TEXT NOT NULL,          -- canonical text; every offset indexes THIS
+  coverage    REAL,                   -- fraction of non-whitespace chars claimed
+  parser      TEXT NOT NULL,          -- which version of `ingest` read it
+  imported_at TEXT NOT NULL,          -- UTC, 'YYYY-MM-DDTHH:MM:SSZ'
+  -- The same file read by the same parser is the same answer, so re-importing
+  -- is a no-op. Read by a NEWER parser it is a second row — which is what
+  -- makes an improved rule diffable against the rows it used to produce.
+  UNIQUE (sha256, parser)
+);
+
+CREATE TABLE extraction (
+  id          INTEGER PRIMARY KEY,
+  source_id   INTEGER NOT NULL REFERENCES source(id) ON DELETE CASCADE,
+  target      TEXT NOT NULL
+                CHECK (target IN ('entry','bullet','skill','reference',
+                                  'profile','contact')),
+  payload     TEXT NOT NULL,          -- JSON: column → value, for `target`
+  parent_id   INTEGER REFERENCES extraction(id) ON DELETE CASCADE,  -- bullet → entry
+  char_start  INTEGER NOT NULL,
+  char_end    INTEGER NOT NULL,
+  page        INTEGER,                -- PDFs only
+  quote       TEXT NOT NULL,          -- the source text, verbatim
+  rule        TEXT NOT NULL,          -- which rule produced this, e.g. 'latex.cventry'
+  confidence  REAL NOT NULL DEFAULT 1.0,
+  status      TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status IN ('pending','accepted','rejected','merged')),
+  entry_id    INTEGER REFERENCES entry(id) ON DELETE SET NULL
+);
+
+CREATE INDEX extraction_source ON extraction(source_id, char_start, id);
+CREATE INDEX extraction_status ON extraction(status, source_id, id);
+
+-- Text the parser read and could not place. Not an error log — a worklist.
+CREATE TABLE unparsed (
+  id         INTEGER PRIMARY KEY,
+  source_id  INTEGER NOT NULL REFERENCES source(id) ON DELETE CASCADE,
+  char_start INTEGER NOT NULL,
+  char_end   INTEGER NOT NULL,
+  text       TEXT NOT NULL
+);
+
+CREATE INDEX unparsed_source ON unparsed(source_id, char_start);
+
 -- ---------------------------------------------------------------- rendering --
 --  One document, in print order. Every ORDER BY ends in a unique column, so
 --  the generated Typst is byte-identical run to run given the same rows.
@@ -281,6 +344,17 @@ CREATE VIEW v_reference AS
 SELECT dr.document_id, r.id AS reference_id, r.name, r.title, r.org,
        r.department, r.address, r.email, r.phone, r.sort_order
 FROM doc_reference dr JOIN reference r ON r.id = dr.reference_id;
+
+-- The review queue: what is waiting on a human, worst-first. Low confidence
+-- sorts to the top because that is where attention is worth spending — a
+-- `latex.cventry` proposal was read off a documented signature and needs a
+-- glance; a `segment.entry` one was inferred from a date and needs a decision.
+CREATE VIEW v_pending AS
+SELECT x.id, s.filename, s.kind AS source_kind, x.target, x.rule,
+       x.confidence, x.page, x.quote, x.payload, x.parent_id
+FROM extraction x JOIN source s ON s.id = x.source_id
+WHERE x.status = 'pending'
+ORDER BY x.confidence, s.id, x.char_start, x.id;
 
 -- Where each version went. One row per send; a version with no sends does not
 -- appear, which is the point — this is the "what has actually gone out" view.

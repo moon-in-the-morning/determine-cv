@@ -7,9 +7,10 @@ no right-aligned dates, no grids.
 
 | File | What it's for |
 | --- | --- |
-| `db/` | The database — your experience. See [db/README](db/README.md). |
+| `db/` | The schema and the seeds the database is built from. See [db/README](db/README.md). |
 | `server.py` | Local web app: enter, edit, tick, generate. |
 | `cv_typst.py` | Rows → Typst. The only file that knows Typst syntax. |
+| `ingest/` | Documents → proposed rows. The inverse of `cv_typst`, and just as dependency-free. See [ingest/README](ingest/README.md). |
 | `web/` | The interface: `index.html`, `app.js`, `style.css`. |
 | `cv-template.typ` | The styling. Edit only to restyle. |
 | `cv.typ` | Hand-written template with `{{placeholders}}`, if you'd rather write one by hand. |
@@ -31,7 +32,27 @@ python3 server.py        # → http://127.0.0.1:8000
 ```
 
 Standard library only — no venv, no npm, nothing to install. Loopback-bound
-and unauthenticated, so keep it local.
+and unauthenticated, so keep it local: it runs on your machine and your CV never
+leaves it.
+
+The first run builds `db/cv.db` for you. By default you get a **blank CV** — one
+document with conventional headings and nothing in them — and you fill it in
+from the Profile and Library tabs. To poke at a finished one instead:
+
+```sh
+python3 server.py --seed example    # the CV in db/seed.sql, filled in
+```
+
+Start over at any time by deleting `db/cv.db` and running it again. The database
+is not tracked by git; it is rebuilt from `db/schema.sql` plus a seed, so what
+the repo carries is the *recipe* rather than the file.
+
+### Profile
+
+Your name, legal name, pronouns, and the profile paragraph — the top of every
+document. Underneath, the contact line: email, phone, city, links, in the order
+they print. An email or link becomes a real hyperlink; **Display** overrides
+what is printed, so `mailto:you@example.edu` can show as `you@example.edu`.
 
 ### Build
 

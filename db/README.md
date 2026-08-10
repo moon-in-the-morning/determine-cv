@@ -4,13 +4,27 @@ SQLite. One file, no server, ships with macOS and Python — and your data is
 genuinely relational, so a document store would just make you hand-maintain
 the joins.
 
+You do not normally build this by hand — `python3 server.py` creates `cv.db` on
+first run, from `schema.sql` plus one of the seeds:
+
+| Seed | What you get |
+| --- | --- |
+| `starter.sql` | *(default)* A blank CV: one document, conventional headings, nothing in them. |
+| `seed.sql` | The worked example — a real CV, filled in. `--seed example`. |
+| none | Tables and nothing else. `--seed none`. |
+
+By hand, if you want to:
+
 ```sh
 sqlite3 cv.db < schema.sql
-sqlite3 cv.db < seed.sql   # optional — rebuilds the rows from a dump
+sqlite3 cv.db < starter.sql
 ```
 
-To start empty, load `schema.sql` alone and fill it through the form
-(`python3 server.py`).
+**`cv.db` is not tracked by git, and `seed.sql` is.** That is the whole
+arrangement: the repo carries the recipe and the example, your working database
+stays yours. It is also what keeps the `send` table — the record of which cut of
+the CV went to whom — out of the repository, since `dump_seed.py` never writes
+those rows. See the note at the top of that script.
 
 ## The two ideas the schema is built on
 
@@ -161,7 +175,8 @@ SELECT number, created_at FROM version
 
 | Script | What it does |
 | --- | --- |
-| `dump_seed.py` | Writes `seed.sql` from `cv.db`. Deterministic, so the diff shows only what you edited. |
+| `starter.sql` | The blank CV a first run loads. Not a script — a seed. |
+| `dump_seed.py` | Writes `seed.sql` from `cv.db`. Deterministic, so the diff shows only what you edited. Holds back `version` and `send`. |
 | `migrate_to_single_document.py` | One-off: multi-variant → single document with include flags. |
 | `migrate_to_documents.py` | One-off: that → this library-and-documents schema. |
 | `migrate_add_references_and_versions.py` | One-off: adds references, versions, sends, and the three new section styles. |

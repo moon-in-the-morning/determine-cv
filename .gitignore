@@ -6,7 +6,14 @@ cv.generated.pdf
 # Typst build output
 *.pdf
 
-# Database backups left by db/migrate_to_single_document.py
+# The working database. Not tracked, and this is the point rather than an
+# oversight: it is rebuilt from schema.sql plus a seed on first run, and it is
+# the only place the `send` table lives — the record of which cut of the CV went
+# to whom. The CV itself is published, as db/seed.sql. The application log is
+# not, and keeping the binary out of the repo is what keeps those separable.
+db/cv.db
+
+# Database backups left by the migrations in db/
 db/*.db.backup-*
 db/*.db.pre-*
 db/*.db.migrating
@@ -19,3 +26,6 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# Synthetic sample used to exercise the importer
+sample-cv.docx

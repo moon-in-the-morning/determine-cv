@@ -13,6 +13,7 @@ Binds to loopback only. There is no auth, so do not put it on a network.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import re
 import shutil
@@ -23,6 +24,9 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+import ingest
+from ingest import store as ingest_store
 
 import cv_typst          # named so it can't collide with the `typst` PyPI package
 
@@ -45,6 +49,7 @@ SEND_FIELDS = ("recipient", "org", "sent_on", "channel", "notes")
 PATCHABLE = {
     "entry":     set(ENTRY_FIELDS),
     "bullet":    {"text", "sort_order"},
+    "contact":   {"kind", "value", "display", "sort_order"},
     "skill":     {"name", "category", "detail", "sort_order"},
     "reference": {*REFERENCE_FIELDS, "sort_order"},
     "section":   {"heading", "style", "category", "sort_order", "include"},
@@ -56,8 +61,10 @@ PATCHABLE = {
 NUMERIC = {"sort_order", "include", "is_current", "density", "section_id"}
 
 TABLE_OF = {"entries": "entry", "bullets": "bullet", "skills": "skill",
-            "sections": "section", "documents": "document",
+            "sections": "section", "documents": "document", "contacts": "contact",
             "references": "reference", "versions": "version", "sends": "send"}
+
+CONTACT_KINDS = ("email", "phone", "city", "link")
 
 MIME = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
         ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml"}
@@ -109,6 +116,8 @@ def get_meta(con) -> dict:
         "orgs": [r["org"] for r in
                  rows(con, "SELECT DISTINCT org FROM entry WHERE org IS NOT NULL ORDER BY org")],
         "profile": get_profile(con),
+        "contacts": get_contacts(con),
+        "contact_kinds": list(CONTACT_KINDS),
         "documents": get_documents(con),
     }
 
@@ -116,6 +125,45 @@ def get_meta(con) -> dict:
 def get_profile(con) -> dict:
     row = con.execute("SELECT * FROM profile WHERE id = 1").fetchone()
     return dict(row) if row else {}
+
+
+def get_contacts(con) -> list[dict]:
+    return rows(con, "SELECT * FROM contact ORDER BY sort_order, id")
+
+
+def patch_profile(con, body: dict) -> dict:
+    """Update the profile, creating it if this database has none yet.
+
+    A fresh database has no profile row, and a plain UPDATE against a row that
+    is not there fails — which used to mean a new user could not type their own
+    name on the first screen. So this upserts.
+    """
+    if not con.execute("SELECT 1 FROM profile WHERE id = 1").fetchone():
+        with con:
+            con.execute("INSERT INTO profile (id, full_name) VALUES (1, ?)",
+                        (clean(body.get("full_name")) or "Your Name",))
+    return patch(con, "profile", 1, body)
+
+
+def create_contact(con, body: dict) -> dict:
+    """Add a line to the header: an email, a phone, a city, or a link."""
+    kind = clean(body.get("kind"))
+    value = clean(body.get("value"))
+    if kind not in CONTACT_KINDS:
+        raise Bad(f"kind must be one of {', '.join(CONTACT_KINDS)}")
+    if not value:
+        raise Bad("a contact needs a value")
+    if not con.execute("SELECT 1 FROM profile WHERE id = 1").fetchone():
+        raise Bad("set your name first — a contact belongs to a profile")
+
+    order = body.get("sort_order")
+    if not str(order or "").strip():
+        order = con.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM contact").fetchone()[0]
+    with con:
+        cur = con.execute("INSERT INTO contact (profile_id, kind, value, display, sort_order) "
+                          "VALUES (1,?,?,?,?)",
+                          (kind, value, clean(body.get("display")), int(order)))
+    return {"id": cur.lastrowid}
 
 
 def get_documents(con) -> list[dict]:
@@ -630,6 +678,214 @@ def download_name(con, document_id, suffix: str) -> str:
     return f"{safe}.{suffix}"
 
 
+
+# ----------------------------------------------------------------- ingestion --
+#  Extraction proposes; a person promotes. Nothing here writes to the library
+#  except through ingest_store.accept(), which is the only path a guess can
+#  take to become a fact.
+
+# The order the review walks, and what each step is called on screen. Skills
+# and languages are the same table — a language is a skill whose category says
+# so — but they are separate confirmations because they are read differently.
+REVIEW_STEPS = [
+    {"key": "contact",     "title": "Contact details",  "targets": ["profile", "contact"]},
+    {"key": "appointments","title": "Appointments",     "targets": ["entry"],
+     "kinds": ["position"]},
+    {"key": "education",   "title": "Education",        "targets": ["entry"],
+     "kinds": ["education"]},
+    {"key": "publications","title": "Publications",     "targets": ["entry"],
+     "kinds": ["publication", "project"]},
+    {"key": "languages",   "title": "Languages",        "targets": ["skill"],
+     "categories": ["Languages", "Language"]},
+    {"key": "skills",      "title": "Skills",           "targets": ["skill"]},
+    {"key": "references",  "title": "References",       "targets": ["reference"]},
+]
+
+UPLOAD_LIMIT = 12 * 1024 * 1024      # a CV that large is not a CV
+
+
+def import_file(con, body: dict) -> dict:
+    """Read an uploaded file, parse it, and stage what it proposed.
+
+    The file arrives base64 in JSON rather than as multipart: `cgi` was removed
+    in Python 3.13, and hand-rolling a multipart parser to save one encode is a
+    poor trade in a stdlib-only project.
+    """
+    filename = clean(body.get("filename")) or "upload"
+    raw = body.get("data") or ""
+    try:
+        data = base64.b64decode(raw, validate=True)
+    except (ValueError, TypeError):
+        raise Bad("that upload did not arrive intact — try again")
+    if not data:
+        raise Bad("that file is empty")
+    if len(data) > UPLOAD_LIMIT:
+        raise Bad(f"that file is {len(data) // 1024 // 1024} MB; the limit is 12 MB")
+
+    try:
+        sources = ingest.parse(filename, data)
+    except ingest.MissingDependency as e:
+        raise Bad(str(e))
+    except Exception as e:                      # a bad file is a user error here
+        raise Bad(f"could not read {filename}: {e}")
+    if not sources:
+        raise Bad(f"nothing readable in {filename}")
+
+    ids = [ingest_store.save(con, source) for source in sources]
+    return {"sources": [source_summary(con, i) for i in ids]}
+
+
+def source_summary(con, source_id: int) -> dict:
+    row = con.execute("SELECT id, filename, kind, coverage, imported_at, parser "
+                      "FROM source WHERE id = ?", (source_id,)).fetchone()
+    if row is None:
+        raise Bad(f"no import with id {source_id}")
+    summary = dict(row)
+    summary["counts"] = {
+        r["status"]: r["n"] for r in
+        rows(con, "SELECT status, COUNT(*) AS n FROM extraction "
+                  "WHERE source_id = ? GROUP BY status", (source_id,))
+    }
+    summary["unparsed"] = con.execute(
+        "SELECT COUNT(*) FROM unparsed WHERE source_id = ?", (source_id,)).fetchone()[0]
+    return summary
+
+
+def get_imports(con) -> dict:
+    ids = [r["id"] for r in rows(con, "SELECT id FROM source ORDER BY id DESC")]
+    return {"sources": [source_summary(con, i) for i in ids],
+            "steps": REVIEW_STEPS}
+
+
+def get_review(con, source_id: int) -> dict:
+    """Everything still awaiting a decision, grouped into the review steps."""
+    proposals = [p for p in ingest_store.pending(con, source_id)]
+    for p in proposals:
+        p["payload"] = p["payload"] if isinstance(p["payload"], dict) else {}
+
+    steps = []
+    claimed: set[int] = set()
+    for step in REVIEW_STEPS:
+        picked = [p for p in proposals
+                  if p["id"] not in claimed and matches_step(p, step)]
+        claimed.update(p["id"] for p in picked)
+        steps.append({**step, "proposals": picked})
+
+    # Bullets ride with the entry they hang under rather than being their own
+    # step — reviewing them detached from their job would be meaningless.
+    bullets: dict[int, list] = {}
+    for p in proposals:
+        if p["target"] == "bullet" and p["parent_id"]:
+            bullets.setdefault(p["parent_id"], []).append(p)
+
+    return {"source": source_summary(con, source_id), "steps": steps,
+            "bullets": bullets,
+            "leftover": [p for p in proposals
+                         if p["id"] not in claimed and p["target"] != "bullet"],
+            "unparsed": rows(con, "SELECT id, text FROM unparsed WHERE source_id = ? "
+                                  "ORDER BY char_start LIMIT 200", (source_id,))}
+
+
+def matches_step(proposal: dict, step: dict) -> bool:
+    if proposal["target"] not in step["targets"]:
+        return False
+    payload = proposal["payload"]
+    if "kinds" in step and payload.get("kind") not in step["kinds"]:
+        return False
+    if "categories" in step and payload.get("category") not in step["categories"]:
+        return False
+    return True
+
+
+def decide(con, extraction_id: int, body: dict) -> dict:
+    """Accept (with the reviewer's edits) or reject one proposal."""
+    action = clean(body.get("action")) or "accept"
+    if action == "reject":
+        ingest_store.reject(con, extraction_id)
+        return {"status": "rejected"}
+    edits = body.get("edits") or {}
+    if not isinstance(edits, dict):
+        raise Bad("edits must be an object")
+    try:
+        new_id = ingest_store.accept(con, extraction_id, edits=edits,
+                                     merge_into=body.get("merge_into"))
+    except (LookupError, ValueError) as e:
+        raise Bad(str(e))
+    return {"status": "accepted", "id": new_id}
+
+
+def decide_many(con, source_id: int, body: dict) -> dict:
+    """Confirm a whole review step at once, carrying any per-row edits.
+
+    Entries go first so that a bullet's parent has become a real row by the
+    time the bullet is promoted.
+    """
+    action = clean(body.get("action")) or "accept"
+    edits = body.get("edits") or {}
+    wanted = [int(i) for i in (body.get("ids") or [])]
+    if not wanted:
+        return {"accepted": 0, "rejected": 0, "failed": []}
+
+    order = {"profile": 0, "contact": 1, "entry": 2, "skill": 3, "reference": 4,
+             "bullet": 5}
+    queue = rows(con, f"SELECT id, target FROM extraction WHERE source_id = ? "
+                      f"AND status = 'pending' AND id IN "
+                      f"({','.join('?' * len(wanted))})", (source_id, *wanted))
+    queue.sort(key=lambda r: (order.get(r["target"], 9), r["id"]))
+
+    done = failed = 0
+    for row in queue:
+        try:
+            if action == "reject":
+                ingest_store.reject(con, row["id"])
+            else:
+                ingest_store.accept(con, row["id"], edits=edits.get(str(row["id"])) or {})
+            done += 1
+        except (LookupError, ValueError):
+            failed += 1
+
+    # Bullets whose entry was accepted in this same pass.
+    if action == "accept":
+        for row in rows(con, "SELECT id FROM extraction WHERE source_id = ? "
+                             "AND status = 'pending' AND target = 'bullet' "
+                             "AND parent_id IN (SELECT id FROM extraction "
+                             "WHERE status = 'accepted' AND source_id = ?)",
+                        (source_id, source_id)):
+            try:
+                ingest_store.accept(con, row["id"])
+                done += 1
+            except (LookupError, ValueError):
+                failed += 1
+
+    return {"done": done, "failed": failed, "action": action}
+
+
+def patch_extraction(con, extraction_id: int, body: dict) -> dict:
+    """Edit a proposal in place, before it is promoted. Staging only — this
+    cannot touch the library."""
+    edits = body.get("payload")
+    if not isinstance(edits, dict):
+        raise Bad("payload must be an object")
+    row = con.execute("SELECT payload, status FROM extraction WHERE id = ?",
+                      (extraction_id,)).fetchone()
+    if row is None:
+        raise Bad(f"no proposal with id {extraction_id}")
+    if row["status"] != "pending":
+        raise Bad(f"that proposal is already {row['status']}")
+    merged = {**json.loads(row["payload"]), **edits}
+    with con:
+        con.execute("UPDATE extraction SET payload = ? WHERE id = ?",
+                    (json.dumps(merged, ensure_ascii=False), extraction_id))
+    return {"payload": merged}
+
+
+def delete_source(con, source_id: int) -> dict:
+    """Discard an import. Anything already promoted stays in the library."""
+    with con:
+        cur = con.execute("DELETE FROM source WHERE id = ?", (source_id,))
+    return {"deleted": cur.rowcount}
+
+
 # ------------------------------------------------------------------ routing --
 
 def route(con, method: str, path: str, body: dict):
@@ -639,6 +895,10 @@ def route(con, method: str, path: str, body: dict):
     if method == "GET":
         if tail == ["meta"]:
             return get_meta(con)
+        if tail == ["imports"]:
+            return get_imports(con)
+        if n == 2 and tail[0] == "imports":
+            return get_review(con, int(tail[1]))
         if tail == ["library"]:
             return get_library(con)
         if tail == ["documents"]:
@@ -657,6 +917,14 @@ def route(con, method: str, path: str, body: dict):
             return create_skill(con, body)
         if tail == ["references"]:
             return create_reference(con, body)
+        if tail == ["contacts"]:
+            return create_contact(con, body)
+        if tail == ["imports"]:
+            return import_file(con, body)
+        if n == 3 and tail[0] == "imports" and tail[2] == "decide":
+            return decide_many(con, int(tail[1]), body)
+        if n == 3 and tail[0] == "extractions" and tail[2] == "decide":
+            return decide(con, int(tail[1]), body)
         if n == 3 and tail[0] == "versions" and tail[2] == "sends":
             return record_send(con, int(tail[1]), body)
         if tail == ["documents"]:
@@ -678,7 +946,7 @@ def route(con, method: str, path: str, body: dict):
 
     if method in ("PUT", "PATCH"):
         if tail == ["profile"] or (n == 2 and tail[0] == "profile"):
-            return patch(con, "profile", 1, body)   # a singleton; the id is ignored
+            return patch_profile(con, body)         # a singleton; the id is ignored
         if n == 4 and tail[0] == "documents" and tail[2] == "place":
             return patch_placement(con, int(tail[1]), int(tail[3]), body)
         if n == 4 and tail[0] == "documents" and tail[2] == "bullets":
@@ -687,6 +955,8 @@ def route(con, method: str, path: str, body: dict):
             return set_skill(con, int(tail[1]), int(tail[3]), body)
         if n == 4 and tail[0] == "documents" and tail[2] == "references":
             return set_reference(con, int(tail[1]), int(tail[3]), body)
+        if n == 2 and tail[0] == "extractions":
+            return patch_extraction(con, int(tail[1]), body)
         if n == 2 and tail[0] in TABLE_OF:
             return patch(con, TABLE_OF[tail[0]], int(tail[1]), body)
 
@@ -701,6 +971,8 @@ def route(con, method: str, path: str, body: dict):
                 con.execute("DELETE FROM entry_skill WHERE entry_id = ? AND skill_id = ?",
                             (int(tail[1]), int(tail[3])))
             return {"ok": True}
+        if n == 2 and tail[0] == "imports":
+            return delete_source(con, int(tail[1]))
         if n == 2 and tail[0] in TABLE_OF:
             return delete_row(con, TABLE_OF[tail[0]], int(tail[1]))
 
@@ -841,14 +1113,51 @@ class Handler(BaseHTTPRequestHandler):
         print(f"  {fmt % args}")
 
 
+DB_DIR = ROOT / "db"
+SEEDS = {"starter": DB_DIR / "starter.sql",    # a blank CV, ready to fill in
+         "example": DB_DIR / "seed.sql",       # the worked example that ships with the repo
+         "none": None}                         # tables only, nothing in them
+
+
+def create_database(path: Path, seed: str) -> None:
+    """Build the database on first run, so nobody has to run sqlite3 by hand.
+
+    This is the whole install step. `schema.sql` makes the tables; the seed
+    decides what is in them — a blank CV with conventional headings by default,
+    or the example CV in the repo if you want something to click around in.
+    """
+    if seed not in SEEDS:
+        raise SystemExit(f"--seed must be one of {', '.join(SEEDS)}")
+    schema = DB_DIR / "schema.sql"
+    if not schema.is_file():
+        raise SystemExit(f"cannot build a database: {schema} is missing")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(path)
+    try:
+        con.executescript(schema.read_text())
+        source = SEEDS[seed]
+        if source is not None:
+            if not source.is_file():
+                raise SystemExit(f"cannot build a database: {source} is missing")
+            con.executescript(source.read_text())
+        con.commit()
+    finally:
+        con.close()
+    print(f"created {path}  ({seed})")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--db", default=ROOT / "db" / "cv.db", type=Path)
     ap.add_argument("--port", default=8000, type=int)
+    ap.add_argument("--seed", default="starter", choices=sorted(SEEDS),
+                    help="what to put in the database if it does not exist yet: "
+                         "'starter' is a blank CV, 'example' is the one in the repo")
     args = ap.parse_args()
 
     if not args.db.exists():
-        raise SystemExit(f"no database at {args.db} — create it with db/schema.sql first")
+        create_database(args.db, args.seed)
 
     Handler.con = connect(args.db)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)

@@ -8,24 +8,88 @@
 </head>
 <body>
 
-<header class="page-head">
-  <h1>cv_db</h1>
-  <p class="sub">One library of experience. Every CV and resume is an arrangement of it.</p>
+<div id="onboarding" class="onboarding" hidden>
+  <div class="onboarding-card">
+    <h1>Start with a CV you already have</h1>
+    <p class="sub">Drop in a Word file, a PDF, or plain text. Nothing is added to your
+      library until you have looked at it and said yes.</p>
+
+    <label class="dropzone" id="dropzone">
+      <input type="file" id="onboard-file" accept=".docx,.pdf,.txt,.md,.markdown,.html,.htm,.typ,.tex" hidden>
+      <span class="dropzone-main">Choose a file, or drop one here</span>
+      <span class="dropzone-note">.docx preferred · also .pdf, .txt, .md, .html, .typ, .tex</span>
+    </label>
+
+    <p class="onboarding-skip">
+      <button id="skip-import" type="button" class="linkish">Skip — I'll type it in myself</button>
+    </p>
+  </div>
+</div>
+
+<header class="topbar">
+  <div class="brand">
+    <strong>cv_db</strong>
+    <span class="sub">one library, many documents</span>
+  </div>
+  <button id="new-document" class="primary">+ New document</button>
 </header>
 
-<nav class="tabs" role="tablist">
-  <button role="tab" class="tab" data-panel="panel-build" aria-selected="true">Build</button>
-  <button role="tab" class="tab" data-panel="panel-documents" aria-selected="false">Documents</button>
-  <button role="tab" class="tab" data-panel="panel-library" aria-selected="false">Library</button>
-  <button role="tab" class="tab" data-panel="panel-skill" aria-selected="false">Skills</button>
-  <button role="tab" class="tab" data-panel="panel-references" aria-selected="false">References</button>
-  <button role="tab" class="tab" data-panel="panel-versions" aria-selected="false">Versions</button>
-</nav>
+<div class="shell">
+<aside class="sidebar">
+  <nav role="tablist">
+    <button role="tab" class="tab" data-panel="panel-documents" aria-selected="true">Documents</button>
+    <button role="tab" class="tab" data-panel="panel-build" aria-selected="false">Build</button>
+    <p class="nav-label">Library</p>
+    <button role="tab" class="tab" data-panel="panel-library" aria-selected="false">Experience</button>
+    <button role="tab" class="tab" data-panel="panel-skill" aria-selected="false">Skills</button>
+    <button role="tab" class="tab" data-panel="panel-references" aria-selected="false">References</button>
+    <button role="tab" class="tab" data-panel="panel-profile" aria-selected="false">Contact</button>
+    <p class="nav-label">Record</p>
+    <button role="tab" class="tab" data-panel="panel-import" aria-selected="false">Import</button>
+    <button role="tab" class="tab" data-panel="panel-versions" aria-selected="false">Versions</button>
+  </nav>
+</aside>
+
+<div class="content">
 
 <p id="flash" class="flash" role="status" aria-live="polite" hidden></p>
 
+<!-- ────────────────────────────────────────────────────────────── import ── -->
+<main id="panel-import" class="panel" role="tabpanel" hidden>
+  <div class="panel-head">
+    <h2>Import</h2>
+    <p class="hint">Everything an import proposes waits here until you confirm it.
+      Nothing reaches your library on its own.</p>
+  </div>
+
+  <label class="dropzone small" id="dropzone-2">
+    <input type="file" id="import-file" accept=".docx,.pdf,.txt,.md,.markdown,.html,.htm,.typ,.tex" hidden>
+    <span class="dropzone-main">Choose a file, or drop one here</span>
+    <span class="dropzone-note">.docx preferred · also .pdf, .txt, .md, .html, .typ, .tex</span>
+  </label>
+
+  <div id="import-list" class="listing"></div>
+
+  <section id="wizard" class="wizard" hidden>
+    <header class="wizard-head">
+      <div>
+        <h2 id="wizard-title">Review</h2>
+        <p class="hint" id="wizard-sub"></p>
+      </div>
+      <button id="wizard-close" type="button" class="small">Close</button>
+    </header>
+    <ol id="wizard-steps" class="wizard-steps"></ol>
+    <div id="wizard-body"></div>
+    <div class="wizard-foot">
+      <button id="wizard-back" type="button">Back</button>
+      <button id="wizard-skip" type="button">Skip this step</button>
+      <button id="wizard-next" class="primary">Confirm and continue</button>
+    </div>
+  </section>
+</main>
+
 <!-- ─────────────────────────────────────────────────────────────── build ── -->
-<main id="panel-build" class="panel" role="tabpanel">
+<main id="panel-build" class="panel" role="tabpanel" hidden>
 
   <div class="generate-bar">
     <select id="active-doc" aria-label="Which document"></select>
@@ -40,6 +104,12 @@
     <summary>Generated Typst</summary>
     <pre id="output"></pre>
   </details>
+
+  <p id="first-run" class="flash" hidden>
+    Start on the <b>Profile</b> tab — your name and contact line go at the top of
+    every document. Then add experience on <b>Library</b> and file it under these
+    headings.
+  </p>
 
   <p id="build-empty" class="empty" hidden>
     This document has no headings yet. Add one below, then pull experience into it
@@ -64,7 +134,7 @@
 </main>
 
 <!-- ─────────────────────────────────────────────────────────── documents ── -->
-<main id="panel-documents" class="panel" role="tabpanel" hidden>
+<main id="panel-documents" class="panel" role="tabpanel">
   <section class="listing">
     <h2>Saved documents <span class="hint">each has its own headings and selection</span></h2>
     <div id="document-list"></div>
@@ -275,6 +345,36 @@
   </form>
 </main>
 
+<!-- ───────────────────────────────────────────────────────────── profile ── -->
+<main id="panel-profile" class="panel" role="tabpanel" hidden>
+  <section class="listing">
+    <h2>You <span class="hint">the top of every document · click to edit</span></h2>
+    <div id="profile-fields"></div>
+  </section>
+
+  <section class="listing">
+    <h2>Contact line <span class="hint">printed under your name, in this order</span></h2>
+    <p class="hint">
+      An <b>email</b> or <b>link</b> becomes a real hyperlink; <b>phone</b> and
+      <b>city</b> print as plain text. <b>Display</b> overrides what is printed —
+      leave it empty and the value prints as it is.
+    </p>
+    <div id="contact-list"></div>
+
+    <form id="contact-form" class="inline-add" autocomplete="off">
+      <select name="kind" aria-label="Kind of contact">
+        <option value="email">email</option>
+        <option value="phone">phone</option>
+        <option value="city">city</option>
+        <option value="link">link</option>
+      </select>
+      <input name="value" placeholder="moony@uchicago.edu" aria-label="Value" required>
+      <input name="display" placeholder="Display as… (optional)" aria-label="Display">
+      <button type="submit">Add</button>
+    </form>
+  </section>
+</main>
+
 <!-- ────────────────────────────────────────────────────────── references ── -->
 <main id="panel-references" class="panel" role="tabpanel" hidden>
   <section class="listing">
@@ -359,6 +459,9 @@
     </datalist>
   </section>
 </main>
+
+</div>
+</div>
 
 <script src="/app.js"></script>
 </body>

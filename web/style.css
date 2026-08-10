@@ -267,3 +267,111 @@ button.small { padding: 0.25rem 0.6rem; font-size: 0.78rem; }
 .sends li.hint { color: var(--ink-soft); font-style: italic; }
 
 .version-card .inline-add input[type="date"] { max-width: 9.5rem; }
+
+
+/* ============================================================ the new shell ==
+   A sidebar and a content column. The old tab strip is gone: with nine places
+   to be, a horizontal row of buttons had stopped being a navigation and become
+   a wall.                                                                     */
+
+body { max-width: none; padding: 0; }
+
+.topbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  padding: 0.9rem 1.5rem; border-bottom: 1px solid var(--rule); background: var(--card);
+  position: sticky; top: 0; z-index: 5;
+}
+.brand strong { font-family: ui-sans-serif, sans-serif; font-size: 1rem; letter-spacing: -0.01em; }
+.brand .sub { margin-left: 0.6rem; font-size: 0.8rem; font-style: italic; color: var(--ink-soft); }
+
+.shell { display: grid; grid-template-columns: 13rem minmax(0, 1fr); align-items: start; }
+@media (max-width: 46rem) { .shell { grid-template-columns: 1fr; } }
+
+.sidebar {
+  position: sticky; top: 3.6rem; align-self: start;
+  padding: 1.25rem 0.75rem; border-right: 1px solid var(--rule);
+}
+.sidebar nav { display: flex; flex-direction: column; gap: 0.1rem; }
+.sidebar .tab {
+  width: 100%; text-align: left; border: none; background: none;
+  padding: 0.4rem 0.7rem; border-radius: var(--radius);
+  font-size: 0.88rem; color: var(--ink-soft);
+}
+.sidebar .tab:hover { background: #f0eeea; filter: none; }
+.sidebar .tab[aria-selected="true"] { background: var(--accent); color: #fff; font-weight: 600; }
+.nav-label {
+  margin: 0.9rem 0 0.2rem; padding: 0 0.7rem;
+  font-family: ui-sans-serif, sans-serif; font-size: 0.68rem;
+  text-transform: uppercase; letter-spacing: 0.09em; color: var(--ink-soft);
+}
+
+.content { padding: 1.5rem; max-width: 56rem; }
+.panel-head h2 { margin: 0 0 0.2rem; font-size: 1.05rem; }
+.panel-head { margin-bottom: 1rem; }
+
+/* ------------------------------------------------------------- onboarding -- */
+
+.onboarding {
+  position: fixed; inset: 0; z-index: 20; display: grid; place-items: center;
+  padding: 1.5rem; background: var(--paper);
+}
+.onboarding-card { max-width: 34rem; text-align: center; }
+.onboarding-card h1 { margin: 0 0 0.4rem; font-size: 1.5rem; }
+.onboarding-card .sub { margin: 0 0 1.5rem; font-style: italic; color: var(--ink-soft); }
+.onboarding-skip { margin-top: 1rem; }
+.linkish { border: none; background: none; color: var(--ink-soft);
+           text-decoration: underline; font-size: 0.85rem; padding: 0; }
+
+.dropzone {
+  display: flex; flex-direction: column; gap: 0.35rem; align-items: center;
+  padding: 2.5rem 1.5rem; cursor: pointer;
+  border: 2px dashed var(--rule); border-radius: var(--radius); background: var(--card);
+}
+.dropzone.small { padding: 1.25rem; margin-bottom: 1.25rem; }
+.dropzone.over, .dropzone:hover { border-color: var(--accent); background: #eef3f1; }
+.dropzone-main { font-family: ui-sans-serif, sans-serif; font-size: 0.95rem; color: var(--accent); }
+.dropzone-note { font-family: ui-sans-serif, sans-serif; font-size: 0.78rem; color: var(--ink-soft); }
+
+/* ----------------------------------------------------------------- wizard -- */
+
+.wizard { margin-top: 1.5rem; border-top: 1px solid var(--rule); padding-top: 1.25rem; }
+.wizard-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.wizard-head h2 { margin: 0; font-size: 1.05rem; }
+
+.wizard-steps { display: flex; flex-wrap: wrap; gap: 0.3rem; list-style: none;
+                margin: 0.9rem 0 1.25rem; padding: 0; }
+.wizard-steps li {
+  padding: 0.2rem 0.6rem; border: 1px solid var(--rule); border-radius: 999px;
+  font-family: ui-sans-serif, sans-serif; font-size: 0.75rem;
+  color: var(--ink-soft); cursor: pointer;
+}
+.wizard-steps li.here { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+.wizard-steps li.done { border-color: var(--accent); color: var(--accent); }
+
+.wizard-foot { display: flex; gap: 0.5rem; margin-top: 1.25rem;
+               padding-top: 1rem; border-top: 1px solid var(--rule); }
+
+.proposal.off { opacity: 0.4; }
+.proposal header { display: flex; align-items: center; gap: 0.5rem; }
+.proposal header h3 { margin: 0; flex: 1; }
+.tag.warn { border-color: var(--error); color: var(--error); }
+
+.proposal-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+                   gap: 0.6rem; margin: 0.6rem 0 0; }
+.proposal-fields .field { margin: 0; }
+.proposal-fields .field span {
+  display: block; margin-bottom: 0.2rem;
+  font-family: ui-sans-serif, sans-serif; font-size: 0.7rem;
+  text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-soft);
+}
+.proposal-fields input { font-size: 0.88rem; }
+
+.quote { margin-top: 0.6rem; }
+.quote summary { cursor: pointer; font-family: ui-sans-serif, sans-serif;
+                 font-size: 0.75rem; color: var(--ink-soft); }
+.quote pre { margin: 0.4rem 0 0; padding: 0.6rem; overflow-x: auto;
+             border-left: 2px solid var(--rule); background: var(--paper);
+             font-size: 0.78rem; white-space: pre-wrap; }
+
+.add-another { border-style: dashed; }
+.add-another h3 { margin: 0 0 0.2rem; }

@@ -184,11 +184,17 @@ INSERT INTO entry_skill (entry_id, skill_id) VALUES
 (40, 24),
 (40, 25);
 
--- document (1 rows) ----------------------------------------------------
-INSERT INTO document (id, slug, title, density, paper, notes) VALUES
-(1, 'full-cv', 'Full CV', 1.0, 'us-letter', 'Everything, in the arrangement this database was migrated from.');
+-- reference (1 rows) ---------------------------------------------------
+--  email, phone, address withheld — see db/dump_seed.py
+INSERT INTO reference (id, name, title, org, department, address, email, phone, relation, sort_order) VALUES
+(1, 'Dr. Helen Robbins', 'Repatriation Specialist', 'Repatriation Consultant Hopi Tribe', NULL, NULL, NULL, NULL, 'Internship Supervisor and Mentor', 1);
 
--- section (8 rows) -----------------------------------------------------
+-- document (2 rows) ----------------------------------------------------
+INSERT INTO document (id, slug, title, density, paper, notes) VALUES
+(1, 'full-cv', 'Full CV', 1.0, 'us-letter', 'Everything, in the arrangement this database was migrated from.'),
+(2, 'cv-test', 'CV_Test', 1.0, 'us-letter', NULL);
+
+-- section (16 rows) -----------------------------------------------------
 INSERT INTO section (id, document_id, heading, style, category, sort_order, include) VALUES
 (1, 1, 'Profile', 'profile', NULL, 1, 1),
 (2, 1, 'Research Experience', 'entries', NULL, 2, 1),
@@ -197,9 +203,17 @@ INSERT INTO section (id, document_id, heading, style, category, sort_order, incl
 (5, 1, 'Education', 'entries', NULL, 5, 1),
 (6, 1, 'Skills', 'skills', NULL, 6, 1),
 (7, 1, 'Writing and Presentations', 'entries', NULL, 7, 1),
-(8, 1, 'Additional Experience', 'entries', NULL, 8, 0);
+(8, 1, 'Additional Experience', 'entries', NULL, 8, 0),
+(9, 2, 'Profile', 'profile', NULL, 1, 1),
+(10, 2, 'Research Experience', 'entries', NULL, 2, 1),
+(11, 2, 'Teaching', 'entries', NULL, 3, 1),
+(12, 2, 'Non-Profit Leadership and Organizing', 'entries', NULL, 4, 1),
+(13, 2, 'Education', 'entries', NULL, 5, 1),
+(14, 2, 'Skills', 'skills', NULL, 6, 1),
+(15, 2, 'Writing and Presentations', 'entries', NULL, 7, 1),
+(16, 2, 'Additional Experience', 'entries', NULL, 8, 0);
 
--- doc_entry (24 rows) ---------------------------------------------------
+-- doc_entry (48 rows) ---------------------------------------------------
 INSERT INTO doc_entry (document_id, entry_id, section_id, sort_order, include) VALUES
 (1, 1, 2, 1, 1),
 (1, 2, 2, 2, 1),
@@ -224,9 +238,33 @@ INSERT INTO doc_entry (document_id, entry_id, section_id, sort_order, include) V
 (1, 51, 7, 2, 1),
 (1, 52, 7, 3, 1),
 (1, 53, 7, 4, 1),
-(1, 54, 7, 5, 1);
+(1, 54, 7, 5, 1),
+(2, 1, 10, 1, 1),
+(2, 2, 10, 2, 1),
+(2, 3, 10, 3, 1),
+(2, 4, 10, 4, 1),
+(2, 5, 11, 1, 1),
+(2, 6, 12, 1, 1),
+(2, 7, 12, 2, 1),
+(2, 8, 12, 3, 0),
+(2, 9, 12, 4, 1),
+(2, 10, 12, 5, 1),
+(2, 11, 12, 6, 0),
+(2, 12, 12, 7, 1),
+(2, 13, 12, 8, 1),
+(2, 14, 16, 1, 1),
+(2, 15, 16, 2, 1),
+(2, 16, 10, 0, 1),
+(2, 17, 10, 0, 1),
+(2, 30, 13, 1, 1),
+(2, 31, 13, 2, 1),
+(2, 50, 15, 1, 1),
+(2, 51, 15, 2, 1),
+(2, 52, 15, 3, 1),
+(2, 53, 15, 4, 1),
+(2, 54, 15, 5, 1);
 
--- doc_skill (29 rows) ---------------------------------------------------
+-- doc_skill (58 rows) ---------------------------------------------------
 INSERT INTO doc_skill (document_id, skill_id) VALUES
 (1, 1),
 (1, 2),
@@ -256,4 +294,38 @@ INSERT INTO doc_skill (document_id, skill_id) VALUES
 (1, 80),
 (1, 81),
 (1, 82),
-(1, 83);
+(1, 83),
+(2, 1),
+(2, 2),
+(2, 3),
+(2, 4),
+(2, 5),
+(2, 6),
+(2, 7),
+(2, 8),
+(2, 20),
+(2, 21),
+(2, 22),
+(2, 23),
+(2, 24),
+(2, 25),
+(2, 26),
+(2, 27),
+(2, 28),
+(2, 29),
+(2, 30),
+(2, 60),
+(2, 61),
+(2, 62),
+(2, 63),
+(2, 64),
+(2, 65),
+(2, 80),
+(2, 81),
+(2, 82),
+(2, 83);
+
+-- doc_reference (2 rows) -----------------------------------------------
+INSERT INTO doc_reference (document_id, reference_id) VALUES
+(1, 1),
+(2, 1);

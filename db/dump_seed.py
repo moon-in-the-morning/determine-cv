@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Write db/seed.sql from db/cv.db — a plain-text backup of your experience.
+"""Write db/seed.sql from db/cv.db — your experience as plain text.
 
     python3 db/dump_seed.py
 
-`schema.sql` then `seed.sql` rebuilds the database exactly:
+`schema.sql` then `seed.sql` rebuilds the database:
 
     sqlite3 fresh.db < db/schema.sql && sqlite3 fresh.db < db/seed.sql
 
@@ -11,7 +11,24 @@ Rows come out in primary-key order and every value is a literal, so re-running
 this on an unchanged database produces a byte-identical file — the diff shows
 what you actually edited, nothing else.
 
-seed.sql is gitignored: it holds your name, phone, and email in plain text.
+THIS FILE IS PUBLISHED. It is the worked example in the repo, so it carries a
+real name, email, and phone number on purpose.
+
+Two things it deliberately holds back, both for the same reason — being in one
+file is not a reason to travel together:
+
+  `version` and `send`      The record of which cut of your CV went to whom, and
+                            when. A CV is written to be read by strangers; a
+                            list of your job applications is not.
+
+  referees' email and phone A referee's name and post are part of the CV. Their
+                            personal address is theirs, and they did not agree
+                            to have it on a public repository. The names stay so
+                            the references section still demonstrates something;
+                            the contact fields come out.
+
+Both stay in `cv.db`, which is not tracked. This script only decides what gets
+published.
 """
 
 from __future__ import annotations
@@ -24,9 +41,10 @@ DB = HERE / "cv.db"
 OUT = HERE / "seed.sql"
 
 # Insert order matters: parents before the rows that reference them.
+# `version` and `send` are absent by design — see the note at the top.
 TABLES = ["profile", "contact", "entry", "bullet", "skill", "entry_skill",
           "reference", "document", "section", "doc_entry", "doc_bullet",
-          "doc_skill", "doc_reference", "version", "send"]
+          "doc_skill", "doc_reference"]
 
 HEADER = """\
 -- ============================================================================
@@ -37,6 +55,11 @@ HEADER = """\
 
 PRAGMA foreign_keys = ON;
 """
+
+
+# Columns blanked on the way out. See the note at the top: a referee's post is
+# part of the CV, their private address is not ours to publish.
+WITHHELD = {"reference": ("email", "phone", "address")}
 
 
 def literal(value) -> str:
@@ -64,14 +87,25 @@ def main() -> None:
         if not rows:
             continue
 
+        withheld = WITHHELD.get(table, ())
         lines.append(f"\n-- {table} ({len(rows)} rows) " + "-" * max(0, 60 - len(table)))
+        if withheld:
+            lines.append(f"--  {', '.join(withheld)} withheld — see db/dump_seed.py")
         lines.append(f"INSERT INTO {table} ({', '.join(columns)}) VALUES")
-        values = [f"({', '.join(literal(row[c]) for c in columns)})" for row in rows]
+        values = [
+            "(" + ", ".join(literal(None if c in withheld else row[c]) for c in columns) + ")"
+            for row in rows]
         lines.append(",\n".join(values) + ";")
 
     OUT.write_text("\n".join(lines) + "\n")
+    held_back = sum(con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                    for t in ("version", "send"))
     con.close()
     print(f"wrote {OUT}  ({OUT.stat().st_size:,} bytes)")
+    if held_back:
+        print(f"held back {held_back} version/send rows — they stay in cv.db")
+    for table, fields in WITHHELD.items():
+        print(f"blanked {table}.{{{', '.join(fields)}}} — they stay in cv.db")
 
 
 if __name__ == "__main__":
