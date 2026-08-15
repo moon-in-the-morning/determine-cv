@@ -32,7 +32,11 @@ import cv_typst          # named so it can't collide with the `typst` PyPI packa
 
 ROOT = Path(__file__).resolve().parent
 WEB = ROOT / "web"
+# The build copy. It stays here because the source it holds opens with a
+# relative `#import "cv-template.typ"`, so it only compiles beside the template.
 GENERATED = ROOT / "cv.generated.typ"
+# Where finished CVs land, named for the document rather than for the build.
+SAVE_DIR = Path.home() / "Desktop"
 
 KINDS = ("position", "education", "project", "publication")
 STYLES = ("entries", "itemized", "skills", "skill-lines", "references", "profile")
@@ -609,10 +613,28 @@ def record_version(con, document_id: int, source: str) -> dict:
             "digest": digest, "new": True}
 
 
+FORMATS = ("typ", "pdf", "both")
+
+
 def generate(con, body: dict) -> dict:
+    """Render, version, and hand back whichever files were asked for.
+
+    `format` is one of typ · pdf · both. The `.typ` is written to disk either
+    way — a PDF cannot be compiled without it — so the choice is about what you
+    are handed, not about what runs. `both` is the honest option for an
+    application that wants the source archived next to what was sent.
+
+    The older `compile: true/false` is still accepted, because a bool maps onto
+    two of the three exactly.
+    """
     document_id = as_number("section_id", body.get("document_id"))
     if not document_id:
         raise Bad("which document? none was given")
+
+    fmt = str(body.get("format") or ("pdf" if body.get("compile") else "typ")).lower()
+    if fmt not in FORMATS:
+        raise Bad(f"format must be one of {', '.join(FORMATS)} — got {fmt!r}")
+
     try:
         source = cv_typst.render(con, document_id)
     except LookupError as e:
@@ -633,30 +655,69 @@ def generate(con, body: dict) -> dict:
     with con:
         con.execute("UPDATE version SET source = ? WHERE id = ?", (stamped, version["id"]))
 
+    # Written twice on purpose. The copy in the project folder is what typst
+    # compiles, because the source imports cv-template.typ by a relative path;
+    # the copy in SAVE_DIR is the one meant to be kept, and carries the name of
+    # the document. Its import still points back here, so it is an archive copy
+    # rather than something that compiles where it sits.
     GENERATED.write_text(stamped)
-    result = {"typst": stamped, "path": GENERATED.name, "compiled": False,
-              "version": version,
-              "download": "/download/typ", "filename": download_name(con, document_id, "typ")}
+    typ_path = SAVE_DIR / download_name(con, document_id, "typ")
+    pdf_path = SAVE_DIR / download_name(con, document_id, "pdf")
+    SAVE_DIR.mkdir(parents=True, exist_ok=True)
+    typ_path.write_text(stamped)
 
-    if body.get("compile"):
-        if not shutil.which("typst"):
-            result["error"] = "typst is not on PATH — the .typ file was still written"
-            return result
-        run = subprocess.run(["typst", "compile", GENERATED.name],
-                             cwd=ROOT, capture_output=True, text=True, timeout=120)
-        result["compiled"] = run.returncode == 0
-        if run.returncode:
-            result["error"] = (run.stderr or run.stdout).strip()[:2000]
-        else:
-            result["pdf"] = GENERATED.with_suffix(".pdf").name
-            result["download"] = "/download/pdf"
-            result["filename"] = download_name(con, document_id, "pdf")
+    typ_file = {"kind": "typ", "name": typ_path.name, "download": "/download/typ",
+                "filename": typ_path.name}
+    # `download`/`filename` name the one file to offer first; `files` is the
+    # whole set, which is the only part that differs between pdf and both.
+    result = {"typst": stamped, "path": typ_path.name, "compiled": False,
+              "directory": str(SAVE_DIR), "version": version, "format": fmt,
+              "files": [typ_file], "download": typ_file["download"],
+              "filename": typ_file["filename"]}
+
+    if fmt == "typ":
+        # A PDF from an earlier run is now older than the .typ beside it. Not
+        # deleted — it is a file someone may still want — but not passed off as
+        # current either, which is the failure this project exists to avoid.
+        if pdf_path.is_file():
+            result["stale_pdf"] = pdf_path.name
+        return result
+
+    if not shutil.which("typst"):
+        result["error"] = "typst is not on PATH — the .typ file was still written"
+        return result
+
+    # Compiled from the project folder so the template import resolves, but
+    # written straight out to SAVE_DIR — no PDF is left behind here to go stale.
+    run = subprocess.run(["typst", "compile", GENERATED.name, str(pdf_path)],
+                         cwd=ROOT, capture_output=True, text=True, timeout=120)
+    result["compiled"] = run.returncode == 0
+    if run.returncode:
+        result["error"] = (run.stderr or run.stdout).strip()[:2000]
+        return result
+
+    pdf_file = {"kind": "pdf", "name": pdf_path.name, "download": "/download/pdf",
+                "filename": download_name(con, document_id, "pdf")}
+    result["pdf"] = pdf_file["name"]
+    result["download"] = pdf_file["download"]
+    result["filename"] = pdf_file["filename"]
+    # The PDF is what gets sent, so it leads. `pdf` alone drops the source from
+    # the set; `both` keeps it, in that order.
+    result["files"] = [pdf_file] if fmt == "pdf" else [pdf_file, typ_file]
     return result
 
 
-def reveal(body: dict) -> dict:
-    """Show the generated file in Finder — the copy in the project folder."""
-    target = GENERATED.with_suffix(".pdf") if body.get("kind") == "pdf" else GENERATED
+def reveal(con, body: dict) -> dict:
+    """Show the saved file in Finder — the copy in SAVE_DIR.
+
+    Takes the document rather than a path: the name is rebuilt from the
+    database, so this still finds the file after a restart.
+    """
+    document_id = as_number("section_id", body.get("document_id"))
+    if not document_id:
+        raise Bad("which document? none was given")
+    kind = "pdf" if body.get("kind") == "pdf" else "typ"
+    target = SAVE_DIR / download_name(con, document_id, kind)
     if not target.is_file():
         raise Bad("nothing generated yet — press Generate first")
     if sys.platform != "darwin":
@@ -932,7 +993,7 @@ def route(con, method: str, path: str, body: dict):
         if tail == ["generate"]:
             return generate(con, body)
         if tail == ["reveal"]:
-            return reveal(body)
+            return reveal(con, body)
         if n == 2 and tail[1] == "reorder" and tail[0] in ("sections", "entries"):
             return reorder(con, TABLE_OF[tail[0]], body)
         if n == 3 and tail[0] == "entries" and tail[2] == "bullets":
@@ -1038,25 +1099,34 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def download(self, kind):
-        """Hand the generated file to the browser as a save, not a page.
+        """Hand a saved file to the browser as a save, not a page.
 
-        Only the two generated files are reachable — `kind` indexes a fixed
-        table rather than becoming part of a path.
+        Only the two saved files are reachable. `kind` indexes a fixed table,
+        and the file's own name is rebuilt from the database off ?doc=, so
+        nothing in the query string ever becomes part of a path.
         """
-        targets = {"pdf": (GENERATED.with_suffix(".pdf"), "application/pdf"),
-                   "typ": (GENERATED, "text/plain; charset=utf-8")}
-        if kind not in targets:
+        mimes = {"pdf": "application/pdf", "typ": "text/plain; charset=utf-8"}
+        if kind not in mimes:
             self.send_error(404)
             return
-        target, mime = targets[kind]
-        if not target.is_file():
+
+        query = parse_qs(urlparse(self.path).query)
+        doc = query.get("doc", [""])[0]
+        if doc.isdigit():
+            target = SAVE_DIR / download_name(self.con, int(doc), kind)
+        elif kind == "typ":
+            target = GENERATED       # no document named: fall back to the build copy
+        else:
+            target = None
+        if target is None or not target.is_file():
             # ASCII only: this goes in the HTTP status line, which is latin-1.
             self.send_error(404, "nothing generated yet - press Generate first")
             return
+        mime = mimes[kind]
 
-        # The page passes ?name= because only it knows which document was just
-        # generated. Sanitised here anyway: this lands in someone's Downloads.
-        wanted = parse_qs(urlparse(self.path).query).get("name", [""])[0]
+        # The page passes ?name= because only it knows what the user is saving
+        # as. Sanitised here anyway: this lands in someone's Downloads.
+        wanted = query.get("name", [""])[0]
         filename = "".join(c for c in wanted if c.isalnum() or c in " -_.") or f"cv.{kind}"
 
         data = target.read_bytes()

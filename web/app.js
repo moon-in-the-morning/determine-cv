@@ -696,6 +696,13 @@ function stamp(iso) {
   return `${date}, ${time} UTC`;
 }
 
+/** "/Users/moon/Desktop" → "the Desktop". Just the tail, for the status line. */
+function shortPath(dir) {
+  if (!dir) return 'disk';
+  const name = dir.replace(/\/+$/, '').split('/').pop();
+  return name === 'Desktop' ? 'the Desktop' : name;
+}
+
 function renderVersions() {
   const list = $('#version-list');
   list.replaceChildren();
@@ -930,69 +937,111 @@ function suggestedName(suffix) {
   return `${safe}.${suffix}`;
 }
 
+/** Which of Typst · PDF · Both is ticked. */
+function chosenFormat() {
+  return $('input[name="format"]:checked')?.value || 'pdf';
+}
+
+const PICKER_TYPES = {
+  pdf: { description: 'PDF document', accept: { 'application/pdf': ['.pdf'] } },
+  typ: { description: 'Typst source', accept: { 'text/plain': ['.typ'] } },
+};
+
+/** Ask WHERE before anything is awaited.
+ *
+ *  A picker needs the click's transient activation, and the first `await`
+ *  spends it — so there is exactly one dialog per press. That is why `both`
+ *  asks for a FOLDER rather than for two filenames: one activation, one
+ *  dialog, two files written into it. Returns null where the browser has no
+ *  picker at all, and the caller falls back to the downloads folder.
+ */
+async function askWhere(format) {
+  try {
+    if (format === 'both') {
+      return window.showDirectoryPicker
+        ? { dir: await window.showDirectoryPicker({ mode: 'readwrite' }) } : null;
+    }
+    return window.showSaveFilePicker
+      ? { file: await window.showSaveFilePicker({
+          suggestedName: suggestedName(format),
+          types: [PICKER_TYPES[format]] }) }
+      : null;
+  } catch (err) {
+    if (err.name === 'AbortError') return 'cancelled';
+    return null;                        // unsupported here — fall through
+  }
+}
+
+async function writeTo(handle, url) {
+  const blob = await (await fetch(url)).blob();
+  const writable = await handle.createWritable();
+  await writable.write(blob);
+  await writable.close();
+}
+
 $('#generate').onclick = async () => {
   const status = $('#generate-status');
   const link = $('#download-link');
   if (!db.doc) { flash('Create a document first.', 'error'); return; }
 
-  const wantPdf = $('#do-compile').checked;
-  const suffix = wantPdf ? 'pdf' : 'typ';
-
-  // Ask WHERE first, while the click still counts as user activation. Once an
-  // await has let that lapse the picker refuses to open.
-  let handle = null;
-  if (window.showSaveFilePicker) {
-    try {
-      handle = await window.showSaveFilePicker({
-        suggestedName: suggestedName(suffix),
-        types: [wantPdf
-          ? { description: 'PDF document', accept: { 'application/pdf': ['.pdf'] } }
-          : { description: 'Typst source', accept: { 'text/plain': ['.typ'] } }],
-      });
-    } catch (err) {
-      if (err.name === 'AbortError') { status.textContent = 'cancelled'; return; }
-      handle = null;                      // unsupported here — fall through
-    }
-  }
+  const format = chosenFormat();
+  const where = await askWhere(format);
+  if (where === 'cancelled') { status.textContent = 'cancelled'; return; }
 
   status.textContent = 'generating…';
   link.hidden = true;
   try {
     const out = await api('POST', '/api/generate',
-                          { document_id: db.doc.document.id, compile: wantPdf });
+                          { document_id: db.doc.document.id, format });
     $('#output').textContent = out.typst;
     $('#output-wrap').hidden = false;
 
     if (out.error) {
-      status.textContent = `wrote ${out.path}`;
+      status.textContent = `wrote ${out.path} to ${shortPath(out.directory)}`;
       flash(out.error, 'error');
       return;
     }
 
-    const url = `${out.download}?name=${encodeURIComponent(out.filename)}&t=${Date.now()}`;
-    if (handle) {
-      const blob = await (await fetch(url)).blob();
-      const writable = await handle.createWritable();
-      await writable.write(blob);
-      await writable.close();
-      flash(`Saved as ${handle.name}.`);
-    } else {
-      saveToDownloads(url, out.filename);
-      flash(`Saved ${out.filename} to your downloads.`);
-    }
+    // `doc` tells the server which saved file to read; `name` is only what the
+    // browser saves it as.
+    const urlFor = f =>
+      `${f.download}?doc=${db.doc.document.id}`
+      + `&name=${encodeURIComponent(f.filename)}&t=${Date.now()}`;
 
-    link.href = url;
-    link.download = out.filename;
-    link.textContent = `↓ ${out.filename}`;
+    // `out.files` is one entry for typ or pdf, two for both — so the same loop
+    // covers all three and the server decides what "both" means.
+    const saved = [];
+    for (const file of out.files) {
+      const url = urlFor(file);
+      if (where?.dir) {
+        await writeTo(
+          await where.dir.getFileHandle(file.filename, { create: true }), url);
+        saved.push(file.filename);
+      } else if (where?.file) {
+        await writeTo(where.file, url);
+        saved.push(where.file.name);
+      } else {
+        saveToDownloads(url, file.filename);
+        saved.push(file.filename);
+      }
+    }
+    flash(`Saved ${saved.join(' and ')}${where ? '.' : ' to your downloads.'}`);
+
+    const primary = out.files[0];
+    link.href = urlFor(primary);
+    link.download = primary.filename;
+    link.textContent = `↓ ${primary.filename}`;
     link.hidden = false;
 
     const v = out.version;
     const which = v.new
       ? `version ${v.number}`
       : `version ${v.number} — unchanged since ${stamp(v.created_at)}`;
-    status.textContent = (out.compiled ? `wrote ${out.path} and ${out.pdf}`
-                                       : `wrote ${out.path} — PDF not compiled`) +
-                         ` · ${which}`;
+    status.textContent =
+      `${out.compiled ? `wrote ${out.path} and ${out.pdf}` : `wrote ${out.path}`}`
+      + ` to ${shortPath(out.directory)}`
+      + ` · ${which}`
+      + (out.stale_pdf ? ` · ${out.stale_pdf} is from an earlier run` : '');
     await refresh();          // so the Versions tab shows it without a reload
   } catch (err) {
     status.textContent = '';
@@ -1001,9 +1050,11 @@ $('#generate').onclick = async () => {
 };
 
 $('#reveal').onclick = async () => {
+  if (!db.doc) { flash('Create a document first.', 'error'); return; }
   try {
     const out = await api('POST', '/api/reveal',
-                          { kind: $('#do-compile').checked ? 'pdf' : 'typ' });
+                          { document_id: db.doc.document.id,
+                            kind: chosenFormat() === 'typ' ? 'typ' : 'pdf' });
     flash(`Showing ${out.revealed} in Finder.`);
   } catch (err) { flash(err.message, 'error'); }
 };
@@ -1268,21 +1319,82 @@ function show(panelId) {
   $$('.panel').forEach(p => { p.hidden = p.id !== panelId; });
 }
 
+/** A file being dragged in from outside, rather than a selection or a link
+ *  being dragged about within the page. Only the former is an import. */
+const isFileDrag = ev => [...(ev.dataTransfer?.types ?? [])].includes('Files');
+
 function wireDropzone(zone, input) {
   if (!zone || !input) return;
-  zone.onclick = () => input.click();
-  input.onchange = () => uploadFile(input.files[0]);
-  ['dragenter', 'dragover'].forEach(e => zone.addEventListener(e, ev => {
-    ev.preventDefault(); zone.classList.add('over');
-  }));
-  ['dragleave', 'drop'].forEach(e => zone.addEventListener(e, ev => {
-    ev.preventDefault(); zone.classList.remove('over');
-  }));
-  zone.addEventListener('drop', ev => uploadFile(ev.dataTransfer?.files?.[0]));
+
+  // No click handler on purpose. The input sits inside the label, so the
+  // browser already forwards a click on the label to it; calling input.click()
+  // here as well sent a second activation that bubbled back into this handler,
+  // and a re-entrant request opens no picker at all.
+  input.onchange = () => {
+    const file = input.files[0];
+    input.value = '';          // so picking the same file twice still fires
+    uploadFile(file);
+  };
+
+  // Highlight only. The drop itself is caught on the window, below.
+  ['dragenter', 'dragover'].forEach(e =>
+    zone.addEventListener(e, () => zone.classList.add('over')));
+  zone.addEventListener('dragleave', ev => {
+    // Moving onto a child of the zone fires dragleave on the zone. Without
+    // this test the highlight strobed, which read as an unresponsive target.
+    if (!zone.contains(ev.relatedTarget)) zone.classList.remove('over');
+  });
+  zone.addEventListener('drop', () => zone.classList.remove('over'));
 }
 
 wireDropzone($('#dropzone'), $('#onboard-file'));
 wireDropzone($('#dropzone-2'), $('#import-file'));
+
+/* ------------------------------------------------------------------- drop --
+
+   The window is the drop target, not the dashed box.
+
+   A file dropped on a page that has not cancelled the default is a file the
+   browser opens: the tab navigates away to it and the app is gone. The dashed
+   box is about a fifth of the window, so most drops landed beside it and
+   Chrome swallowed the CV — which from the outside is indistinguishable from
+   drag and drop being broken. Every file drop anywhere on the page is now
+   caught and read as an import. The box says where to aim; it no longer
+   decides whether the drop counts.                                          */
+
+let dragDepth = 0;               // nested elements fire enter/leave in pairs
+
+function endDrag() {
+  dragDepth = 0;
+  document.body.classList.remove('dragging');
+}
+
+window.addEventListener('dragenter', ev => {
+  if (!isFileDrag(ev)) return;
+  ev.preventDefault();
+  dragDepth += 1;
+  document.body.classList.add('dragging');
+});
+
+window.addEventListener('dragover', ev => {
+  if (!isFileDrag(ev)) return;
+  ev.preventDefault();           // the one call that keeps Chrome from leaving
+  ev.dataTransfer.dropEffect = 'copy';
+});
+
+window.addEventListener('dragleave', ev => {
+  if (!isFileDrag(ev)) return;
+  dragDepth -= 1;
+  if (dragDepth <= 0) endDrag();
+});
+
+window.addEventListener('drop', ev => {
+  if (!isFileDrag(ev)) return;
+  ev.preventDefault();
+  endDrag();
+  const file = ev.dataTransfer.files[0];
+  if (file) uploadFile(file);
+});
 
 $('#skip-import').onclick = () => {
   localStorage.setItem('cv_db.skipped_import', '1');

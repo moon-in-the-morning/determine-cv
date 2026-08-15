@@ -14,6 +14,13 @@
 
 * { box-sizing: border-box; }
 
+/* The `hidden` property only hides an element because the browser's own
+   stylesheet says `[hidden] { display: none }` — and any author rule that sets
+   `display` outranks it. `.onboarding` sets `display: grid`, so hiding the
+   overlay from JavaScript did nothing and it covered the page while the wizard
+   opened underneath. Restate it here, where it wins. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0 auto;
   padding: 2rem 1.5rem 6rem;
@@ -160,6 +167,10 @@ code { font-size: 0.85em; }
                   letter-spacing: 0.06em; color: var(--ink-soft); }
 .check { display: flex; align-items: baseline; gap: 0.4rem; font-size: 0.9rem; padding: 0.1rem 0; }
 .check input { width: auto; }
+
+/* Typst · PDF · Both — three exclusive choices, so they read as one control. */
+.formats { display: flex; align-items: baseline; gap: 0.75rem; }
+.formats .check { white-space: nowrap; }
 
 .style-select { width: auto; padding: 0.2rem 0.4rem; font-size: 0.75rem; color: var(--ink-soft); }
 
@@ -332,6 +343,19 @@ body { max-width: none; padding: 0; }
 .dropzone-main { font-family: ui-sans-serif, sans-serif; font-size: 0.95rem; color: var(--accent); }
 .dropzone-note { font-family: ui-sans-serif, sans-serif; font-size: 0.78rem; color: var(--ink-soft); }
 
+/* While a file is anywhere over the window the page says so, because the whole
+   window takes the drop. `pointer-events: none` matters: an overlay that
+   swallowed the drop events would reintroduce the very bug this fixes. Sits
+   above `.onboarding` (z-index 20) so it shows on the first-run screen too. */
+body.dragging::after {
+  content: "Drop your CV anywhere on this page";
+  position: fixed; inset: 0; z-index: 50; pointer-events: none;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(238, 243, 241, 0.92);
+  border: 3px dashed var(--accent);
+  font-family: ui-sans-serif, sans-serif; font-size: 1.15rem; color: var(--accent);
+}
+
 /* ----------------------------------------------------------------- wizard -- */
 
 .wizard { margin-top: 1.5rem; border-top: 1px solid var(--rule); padding-top: 1.25rem; }
@@ -375,3 +399,14 @@ body { max-width: none; padding: 0; }
 
 .add-another { border-style: dashed; }
 .add-another h3 { margin: 0 0 0.2rem; }
+
+/* The file input is hidden from sight but NOT with display:none — a label
+   forwards its click to a visually-hidden input reliably, and to a
+   display:none one only in some browsers. That difference is why the picker
+   would not open. */
+.file-input {
+  position: absolute; width: 1px; height: 1px;
+  opacity: 0; overflow: hidden; clip-path: inset(50%);
+}
+.dropzone { position: relative; }
+.file-input:focus-visible + .dropzone-main { outline: 2px solid var(--accent); }

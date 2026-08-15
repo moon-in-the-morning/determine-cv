@@ -15,7 +15,8 @@
       library until you have looked at it and said yes.</p>
 
     <label class="dropzone" id="dropzone">
-      <input type="file" id="onboard-file" accept=".docx,.pdf,.txt,.md,.markdown,.html,.htm,.typ,.tex" hidden>
+      <input type="file" id="onboard-file" class="file-input"
+             accept=".docx,.pdf,.txt,.md,.markdown,.html,.htm,.typ,.tex">
       <span class="dropzone-main">Choose a file, or drop one here</span>
       <span class="dropzone-note">.docx preferred · also .pdf, .txt, .md, .html, .typ, .tex</span>
     </label>
@@ -63,7 +64,8 @@
   </div>
 
   <label class="dropzone small" id="dropzone-2">
-    <input type="file" id="import-file" accept=".docx,.pdf,.txt,.md,.markdown,.html,.htm,.typ,.tex" hidden>
+    <input type="file" id="import-file" class="file-input"
+           accept=".docx,.pdf,.txt,.md,.markdown,.html,.htm,.typ,.tex">
     <span class="dropzone-main">Choose a file, or drop one here</span>
     <span class="dropzone-note">.docx preferred · also .pdf, .txt, .md, .html, .typ, .tex</span>
   </label>
@@ -94,7 +96,11 @@
   <div class="generate-bar">
     <select id="active-doc" aria-label="Which document"></select>
     <button id="generate" class="primary">Generate</button>
-    <label class="check"><input type="checkbox" id="do-compile" checked> <span>compile to PDF</span></label>
+    <span class="formats" role="radiogroup" aria-label="What to generate">
+      <label class="check"><input type="radio" name="format" value="typ"> <span>Typst</span></label>
+      <label class="check"><input type="radio" name="format" value="pdf" checked> <span>PDF</span></label>
+      <label class="check"><input type="radio" name="format" value="both"> <span>Both</span></label>
+    </span>
     <a id="download-link" class="download-link" href="/download/pdf" hidden>↓</a>
     <button id="reveal" type="button">Reveal in Finder</button>
     <span id="generate-status" class="hint"></span>

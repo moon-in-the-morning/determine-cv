@@ -14,7 +14,7 @@ no right-aligned dates, no grids.
 | `web/` | The interface: `index.html`, `app.js`, `style.css`. |
 | `cv-template.typ` | The styling. Edit only to restyle. |
 | `cv.typ` | Hand-written template with `{{placeholders}}`, if you'd rather write one by hand. |
-| `cv.generated.typ` | What the Generate button writes. Overwritten every run — don't edit it. |
+| `cv.generated.typ` | The build copy — what typst is pointed at, since it needs to sit beside `cv-template.typ`. Overwritten every run; don't edit it. The CV you keep goes to the Desktop. |
 
 ## How it works
 
@@ -67,9 +67,11 @@ between documents; everything you change writes straight to the database.
 - **Click any text to edit it** — headings, dates, bullet wording. It saves
   when you click away; Escape cancels. Edits to a bullet or a date are to the
   library, so every document sees them.
-- **Generate** writes `cv.generated.typ`, compiles the PDF if the box is
-  ticked, and opens a save dialog so you choose where it lands. A heading with
-  nothing under it is skipped, so it never prints as a bare rule.
+- **Generate** saves the finished CV to your **Desktop**, named for the
+  document — `Moon Younes - Full CV.pdf` and the `.typ` beside it, both
+  overwritten on the next run. It compiles the PDF if the box is ticked, and
+  still opens a save dialog if you want a second copy somewhere else. A heading
+  with nothing under it is skipped, so it never prints as a bare rule.
 
 ### Documents
 
@@ -121,7 +123,7 @@ the PDF's metadata (`Keywords`), so they travel with the file after it leaves
 this machine:
 
 ```sh
-python3 -c "from pypdf import PdfReader; print(PdfReader('cv.generated.pdf').metadata)"
+python3 -c "from pypdf import PdfReader; print(PdfReader('$HOME/Desktop/Moon Younes - Full CV.pdf').metadata)"
 ```
 
 Under each version you record where it went: recipient, organisation, date, and
