@@ -45,7 +45,7 @@ INSERT INTO entry (id, kind, org, title, note, location, date_display, start_ym,
 (53, 'publication', 'Scholasticide in Palestine (blog), University of Chicago', 'Scholasticide Project publications: "STEM Education Under Blockade" (April 23, 2026), "Yaqeen Hammad: The Maker of Good" (June 27, 2025), and "Starvation Is a Weapon" (August 29, 2025).', NULL, NULL, '2025 – 2026', '2026-04', '2026-04', 0, NULL, NULL),
 (54, 'publication', 'Women, Gender, and Sexuality in the MENA Conference, UIC', 'Panelist, "Feminism and Palestinian Activism in the U.S."', NULL, NULL, 'March 2022', '2022-03', '2022-03', 0, NULL, NULL);
 
--- bullet (45 rows) ------------------------------------------------------
+-- bullet (46 rows) ------------------------------------------------------
 INSERT INTO bullet (id, entry_id, text, sort_order) VALUES
 (1, 1, 'Conduct provenance investigations on individual objects and full acquisition catalogues, analyzing trade routes, import and export records, and antiquities law across multiple regions and historical periods, including navigating both physical and digital archives.', 1),
 (2, 1, 'Support active NAGPRA cases in collaboration with Hopi and Pekuakamiulnuatsh (Innu) communities, including drafting and organizing appendices for repatriation proposals submitted to internal review committees and federal authorities.', 2),
@@ -89,11 +89,12 @@ INSERT INTO bullet (id, entry_id, text, sort_order) VALUES
 (44, 16, 'Review and submit completed sections through the project''s editorial portal on a defined production schedule.', 2),
 (45, 17, 'Trained in network architecture, covering the chronology and evolution of internet protocols, distributed-systems design patterns, and failure modes; apply the material directly to independent project white-lotus.', 1),
 (46, 17, 'Draft service contracts and design invoicing and client documentation systems.', 2),
-(47, 30, 'Thesis in progress: "Restitution and the State: Repatriation, Repentance, and the Limits of State-Led Repair." Advised by Prof. Alireza Doostdar.', 1),
+(47, 30, 'Thesis in progress: "Restitution and the State: Repatriation, Repentance, and the Limits of State-Led Repair." Advisor undetermined.', 1),
 (48, 30, 'Comparative study of NAGPRA and the 1952 Luxembourg Agreement, drawing on Maimonidean teshuvah, Islamic tawba, and theorists of state-formation.', 2),
-(49, 31, 'Senior thesis: "Let Them Return Home: Creating Culturally Conscious NAGPRA Reform Prioritizing Indigenous Sovereignty and Spiritual Belief." Advised by Dr. Vincent LaMotta.', 1);
+(49, 31, 'Senior thesis: "Let Them Return Home: Creating Culturally Conscious NAGPRA Reform Prioritizing Indigenous Sovereignty and Spiritual Belief." Advised by Dr. Vincent LaMotta.', 1),
+(50, 17, 'Learned to code in Rust', 3);
 
--- skill (35 rows) -------------------------------------------------------
+-- skill (37 rows) -------------------------------------------------------
 INSERT INTO skill (id, name, category, detail, sort_order) VALUES
 (1, 'Provenance and archival research', 'Research and writing', NULL, 1),
 (2, 'Qualitative and quantitative data analysis', 'Research and writing', NULL, 2),
@@ -129,7 +130,9 @@ INSERT INTO skill (id, name, category, detail, sort_order) VALUES
 (80, 'English', 'Languages', 'native', 1),
 (81, 'Arabic', 'Languages', 'A2 Levantine', 2),
 (82, 'German', 'Languages', 'A1', 3),
-(83, 'Spanish', 'Languages', 'A1', 4);
+(83, 'Spanish', 'Languages', 'A1', 4),
+(84, 'Postgres', 'Technical', NULL, 12),
+(85, 'SQLite', 'Technical', NULL, 13);
 
 -- entry_skill (50 rows) -------------------------------------------------
 INSERT INTO entry_skill (entry_id, skill_id) VALUES
@@ -184,10 +187,11 @@ INSERT INTO entry_skill (entry_id, skill_id) VALUES
 (40, 24),
 (40, 25);
 
--- reference (1 rows) ---------------------------------------------------
+-- reference (2 rows) ---------------------------------------------------
 --  email, phone, address withheld — see db/dump_seed.py
 INSERT INTO reference (id, name, title, org, department, address, email, phone, relation, sort_order) VALUES
-(1, 'Dr. Helen Robbins', 'Repatriation Specialist', 'Repatriation Consultant Hopi Tribe', NULL, NULL, NULL, NULL, 'Internship Supervisor and Mentor', 1);
+(1, 'Dr. Helen Robbins', 'Repatriation Specialist', 'Repatriation Consultant Hopi Tribe', NULL, NULL, NULL, NULL, 'Internship Supervisor and Mentor', 1),
+(2, 'Niall Atkinson', 'Associate Professor of Art History', 'University of Chicago', 'Department of Art History', NULL, NULL, NULL, NULL, 2);
 
 -- document (2 rows) ----------------------------------------------------
 INSERT INTO document (id, slug, title, density, paper, notes) VALUES
@@ -264,7 +268,7 @@ INSERT INTO doc_entry (document_id, entry_id, section_id, sort_order, include) V
 (2, 53, 15, 4, 1),
 (2, 54, 15, 5, 1);
 
--- doc_skill (58 rows) ---------------------------------------------------
+-- doc_skill (60 rows) ---------------------------------------------------
 INSERT INTO doc_skill (document_id, skill_id) VALUES
 (1, 1),
 (1, 2),
@@ -295,6 +299,8 @@ INSERT INTO doc_skill (document_id, skill_id) VALUES
 (1, 81),
 (1, 82),
 (1, 83),
+(1, 84),
+(1, 85),
 (2, 1),
 (2, 2),
 (2, 3),
@@ -325,7 +331,8 @@ INSERT INTO doc_skill (document_id, skill_id) VALUES
 (2, 82),
 (2, 83);
 
--- doc_reference (2 rows) -----------------------------------------------
+-- doc_reference (3 rows) -----------------------------------------------
 INSERT INTO doc_reference (document_id, reference_id) VALUES
 (1, 1),
+(1, 2),
 (2, 1);
