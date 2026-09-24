@@ -29,6 +29,7 @@ import ingest
 from ingest import store as ingest_store
 
 import cv_typst          # named so it can't collide with the `typst` PyPI package
+import cv_docx           # the same rows, rendered to OOXML instead
 
 ROOT = Path(__file__).resolve().parent
 WEB = ROOT / "web"
@@ -613,19 +614,23 @@ def record_version(con, document_id: int, source: str) -> dict:
             "digest": digest, "new": True}
 
 
-FORMATS = ("typ", "pdf", "both")
+FORMATS = ("typ", "pdf", "docx", "both", "all")
 
 
 def generate(con, body: dict) -> dict:
     """Render, version, and hand back whichever files were asked for.
 
-    `format` is one of typ · pdf · both. The `.typ` is written to disk either
-    way — a PDF cannot be compiled without it — so the choice is about what you
-    are handed, not about what runs. `both` is the honest option for an
-    application that wants the source archived next to what was sent.
+    `format` is one of typ · pdf · docx · both · all. The `.typ` is written to
+    disk whichever is chosen — a PDF cannot be compiled without it, and the
+    version is computed from it — so the choice is about what you are handed,
+    not about what runs. `both` is pdf and source; `all` adds the Word file.
+
+    The Word file is rendered from the same rows by cv_docx, not converted from
+    the PDF, so nothing about it depends on `typst` being installed. That is
+    deliberate: it is the one output that still works on a bare machine.
 
     The older `compile: true/false` is still accepted, because a bool maps onto
-    two of the three exactly.
+    two of the formats exactly.
     """
     document_id = as_number("section_id", body.get("document_id"))
     if not document_id:
@@ -643,11 +648,14 @@ def generate(con, body: dict) -> dict:
     # Version first, then re-render carrying its number — the file that lands
     # on disk is the one whose metadata names the version it is.
     version = record_version(con, document_id, source)
-    stamped = cv_typst.render(con, document_id, {
+    # One stamp, shared by both renderers, so the Word file and the PDF can
+    # never disagree about which version they are.
+    stamp = {
         "version": version["number"],
         "created_at": version["created_at"],
         "digest": version["digest"],
-    })
+    }
+    stamped = cv_typst.render(con, document_id, stamp)
 
     # Keep the stamped text, so a version can be rebuilt as the file it was.
     # Its digest still comes from the unstamped render above, which is what
@@ -663,17 +671,35 @@ def generate(con, body: dict) -> dict:
     GENERATED.write_text(stamped)
     typ_path = SAVE_DIR / download_name(con, document_id, "typ")
     pdf_path = SAVE_DIR / download_name(con, document_id, "pdf")
+    docx_path = SAVE_DIR / download_name(con, document_id, "docx")
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
     typ_path.write_text(stamped)
 
     typ_file = {"kind": "typ", "name": typ_path.name, "download": "/download/typ",
                 "filename": typ_path.name}
     # `download`/`filename` name the one file to offer first; `files` is the
-    # whole set, which is the only part that differs between pdf and both.
+    # whole set, which is the only part that differs between the formats.
     result = {"typst": stamped, "path": typ_path.name, "compiled": False,
               "directory": str(SAVE_DIR), "version": version, "format": fmt,
               "files": [typ_file], "download": typ_file["download"],
               "filename": typ_file["filename"]}
+
+    # Written before the PDF on purpose. It needs nothing installed, so a
+    # missing `typst` should not cost the Word file too.
+    docx_file = None
+    if fmt in ("docx", "all"):
+        cv_docx.write(con, document_id, docx_path, stamp)
+        docx_file = {"kind": "docx", "name": docx_path.name,
+                     "download": "/download/docx", "filename": docx_path.name}
+        result["docx"] = docx_file["name"]
+
+    if fmt == "docx":
+        result["files"] = [docx_file]
+        result["download"] = docx_file["download"]
+        result["filename"] = docx_file["filename"]
+        if pdf_path.is_file():
+            result["stale_pdf"] = pdf_path.name
+        return result
 
     if fmt == "typ":
         # A PDF from an earlier run is now older than the .typ beside it. Not
@@ -685,6 +711,10 @@ def generate(con, body: dict) -> dict:
 
     if not shutil.which("typst"):
         result["error"] = "typst is not on PATH — the .typ file was still written"
+        if docx_file:
+            # `all` asked for three and got two. Say which two rather than
+            # reporting the whole run as a failure.
+            result["files"] = [docx_file, typ_file]
         return result
 
     # Compiled from the project folder so the template import resolves, but
@@ -694,6 +724,8 @@ def generate(con, body: dict) -> dict:
     result["compiled"] = run.returncode == 0
     if run.returncode:
         result["error"] = (run.stderr or run.stdout).strip()[:2000]
+        if docx_file:
+            result["files"] = [docx_file, typ_file]
         return result
 
     pdf_file = {"kind": "pdf", "name": pdf_path.name, "download": "/download/pdf",
@@ -702,8 +734,13 @@ def generate(con, body: dict) -> dict:
     result["download"] = pdf_file["download"]
     result["filename"] = pdf_file["filename"]
     # The PDF is what gets sent, so it leads. `pdf` alone drops the source from
-    # the set; `both` keeps it, in that order.
-    result["files"] = [pdf_file] if fmt == "pdf" else [pdf_file, typ_file]
+    # the set; `both` keeps it; `all` puts the Word file between the two.
+    if fmt == "pdf":
+        result["files"] = [pdf_file]
+    elif fmt == "all":
+        result["files"] = [pdf_file, docx_file, typ_file]
+    else:
+        result["files"] = [pdf_file, typ_file]
     return result
 
 
@@ -716,7 +753,7 @@ def reveal(con, body: dict) -> dict:
     document_id = as_number("section_id", body.get("document_id"))
     if not document_id:
         raise Bad("which document? none was given")
-    kind = "pdf" if body.get("kind") == "pdf" else "typ"
+    kind = body.get("kind") if body.get("kind") in ("pdf", "docx") else "typ"
     target = SAVE_DIR / download_name(con, document_id, kind)
     if not target.is_file():
         raise Bad("nothing generated yet — press Generate first")
@@ -1101,11 +1138,13 @@ class Handler(BaseHTTPRequestHandler):
     def download(self, kind):
         """Hand a saved file to the browser as a save, not a page.
 
-        Only the two saved files are reachable. `kind` indexes a fixed table,
+        Only the three saved files are reachable. `kind` indexes a fixed table,
         and the file's own name is rebuilt from the database off ?doc=, so
         nothing in the query string ever becomes part of a path.
         """
-        mimes = {"pdf": "application/pdf", "typ": "text/plain; charset=utf-8"}
+        mimes = {"pdf": "application/pdf", "typ": "text/plain; charset=utf-8",
+                 "docx": "application/vnd.openxmlformats-officedocument"
+                         ".wordprocessingml.document"}
         if kind not in mimes:
             self.send_error(404)
             return

@@ -10,6 +10,7 @@ no right-aligned dates, no grids.
 | `db/` | The schema and the seeds the database is built from. See [db/README](db/README.md). |
 | `server.py` | Local web app: enter, edit, tick, generate. |
 | `cv_typst.py` | Rows → Typst. The only file that knows Typst syntax. |
+| `cv_docx.py` | Rows → Word. The only file that knows OOXML. Same rows, same shapes, no `typst` needed. |
 | `ingest/` | Documents → proposed rows. The inverse of `cv_typst`, and just as dependency-free. See [ingest/README](ingest/README.md). |
 | `web/` | The interface: `index.html`, `app.js`, `style.css`. |
 | `cv-template.typ` | The styling. Edit only to restyle. |
@@ -69,9 +70,20 @@ between documents; everything you change writes straight to the database.
   library, so every document sees them.
 - **Generate** saves the finished CV to your **Desktop**, named for the
   document — `Moon Younes - Full CV.pdf` and the `.typ` beside it, both
-  overwritten on the next run. It compiles the PDF if the box is ticked, and
-  still opens a save dialog if you want a second copy somewhere else. A heading
-  with nothing under it is skipped, so it never prints as a bare rule.
+  overwritten on the next run. It still opens a save dialog if you want a
+  second copy somewhere else. A heading with nothing under it is skipped, so it
+  never prints as a bare rule.
+
+  Pick what you get: **Typst**, **PDF**, **Word**, **Both** (PDF and source),
+  or **All three**. The `.typ` is written whichever you choose, because the
+  version is computed from it. The multi-file choices ask for a folder rather
+  than a filename, so one press is still one dialog.
+
+  The Word file is rendered from the same rows by `cv_docx.py`, not converted
+  from the PDF. Nothing about it needs `typst` installed, which makes it the
+  one output that still works on a bare machine — and if `typst` is missing,
+  **All three** hands you the Word file and the source rather than failing.
+  Pages opens `.docx`, so there is no separate Pages export.
 
 ### Documents
 

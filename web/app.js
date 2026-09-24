@@ -937,27 +937,35 @@ function suggestedName(suffix) {
   return `${safe}.${suffix}`;
 }
 
-/** Which of Typst · PDF · Both is ticked. */
+/** Which of Typst · PDF · Word · Both · All three is ticked. */
 function chosenFormat() {
   return $('input[name="format"]:checked')?.value || 'pdf';
 }
 
+/** The formats that write more than one file, and so ask for a folder. */
+const MULTI_FORMATS = ['both', 'all'];
+
+const DOCX_MIME =
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
 const PICKER_TYPES = {
   pdf: { description: 'PDF document', accept: { 'application/pdf': ['.pdf'] } },
   typ: { description: 'Typst source', accept: { 'text/plain': ['.typ'] } },
+  docx: { description: 'Word document', accept: { [DOCX_MIME]: ['.docx'] } },
 };
 
 /** Ask WHERE before anything is awaited.
  *
  *  A picker needs the click's transient activation, and the first `await`
- *  spends it — so there is exactly one dialog per press. That is why `both`
- *  asks for a FOLDER rather than for two filenames: one activation, one
- *  dialog, two files written into it. Returns null where the browser has no
- *  picker at all, and the caller falls back to the downloads folder.
+ *  spends it — so there is exactly one dialog per press. That is why the
+ *  multi-file formats ask for a FOLDER rather than for two or three
+ *  filenames: one activation, one dialog, every file written into it.
+ *  Returns null where the browser has no picker at all, and the caller falls
+ *  back to the downloads folder.
  */
 async function askWhere(format) {
   try {
-    if (format === 'both') {
+    if (MULTI_FORMATS.includes(format)) {
       return window.showDirectoryPicker
         ? { dir: await window.showDirectoryPicker({ mode: 'readwrite' }) } : null;
     }
@@ -1008,8 +1016,9 @@ $('#generate').onclick = async () => {
       `${f.download}?doc=${db.doc.document.id}`
       + `&name=${encodeURIComponent(f.filename)}&t=${Date.now()}`;
 
-    // `out.files` is one entry for typ or pdf, two for both — so the same loop
-    // covers all three and the server decides what "both" means.
+    // `out.files` is one entry for a single format and two or three for the
+    // combined ones — so the same loop covers every format, and the server
+    // decides what "both" and "all" mean.
     const saved = [];
     for (const file of out.files) {
       const url = urlFor(file);
@@ -1037,8 +1046,10 @@ $('#generate').onclick = async () => {
     const which = v.new
       ? `version ${v.number}`
       : `version ${v.number} — unchanged since ${stamp(v.created_at)}`;
+    // Name what actually landed rather than guessing from `compiled`, which
+    // only ever knew about the PDF.
     status.textContent =
-      `${out.compiled ? `wrote ${out.path} and ${out.pdf}` : `wrote ${out.path}`}`
+      `wrote ${out.files.map(f => f.name).join(', ')}`
       + ` to ${shortPath(out.directory)}`
       + ` · ${which}`
       + (out.stale_pdf ? ` · ${out.stale_pdf} is from an earlier run` : '');
@@ -1054,7 +1065,8 @@ $('#reveal').onclick = async () => {
   try {
     const out = await api('POST', '/api/reveal',
                           { document_id: db.doc.document.id,
-                            kind: chosenFormat() === 'typ' ? 'typ' : 'pdf' });
+                            kind: ({ typ: 'typ', docx: 'docx' })[chosenFormat()]
+                                  || 'pdf' });
     flash(`Showing ${out.revealed} in Finder.`);
   } catch (err) { flash(err.message, 'error'); }
 };
